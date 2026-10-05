@@ -131,6 +131,7 @@ class ActiveTurn:
     used_tools: bool = False
     in_tool: bool = False
     cancelled: bool = False
+    output_closed: bool = False  # all text produced; only playback remains
 
     def stream(self, delta: str) -> None:
         if self.cancelled or not delta:
@@ -169,6 +170,7 @@ class ActiveTurn:
         if not self.cancelled:
             for chunk in self.chunker.flush():
                 self._speak(chunk)
+        self.output_closed = True
         self.manager._speech.close(self.handle)
 
     @property
@@ -268,7 +270,7 @@ class ConversationManager:
             target = S.TRANSCRIBING
         elif self._speech.speaking:
             target = S.SPEAKING
-        elif self._turn is not None:
+        elif self._turn is not None and not self._turn.output_closed:
             target = S.TOOL_EXECUTION if self._turn.in_tool else S.THINKING
         else:
             target = S.IDLE
@@ -631,7 +633,10 @@ class ConversationManager:
             heard = turn.handle.spoken_text
             display = turn.display_text
             if display:
-                self._memory.add_turn(self.conversation_id, "assistant", display, heard=heard,
+                # `heard` is stored only for interrupted replies: it is what the user actually got to hear,
+                # which is what the model must be told on the next turn.
+                self._memory.add_turn(self.conversation_id, "assistant", display,
+                                      heard=heard if turn.cancelled else None,
                                       meta={"route": summary.route if summary else None,
                                             "interrupted": turn.cancelled})
                 self._shared["last_reply"] = display

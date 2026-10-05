@@ -88,7 +88,7 @@ class ContextBuilder:
         used = 0
         for turn in reversed(turns):
             content = turn["content"]
-            if turn["role"] == "assistant" and turn.get("heard") is not None and turn["heard"] != content:
+            if turn["role"] == "assistant" and turn.get("heard") is not None:  # stored only when interrupted
                 heard = turn["heard"].strip()
                 content = (f"{heard} [the user interrupted here and did not hear the rest]" if heard
                            else "[the user interrupted before hearing this reply]")
