@@ -96,6 +96,9 @@ def setup_logging(level: str = "INFO", log_dir: Path | None = None, console: boo
     for noisy in ("httpx", "httpcore", "urllib3", "faster_whisper", "websockets", "spotipy",
                   "transformers", "huggingface_hub", "asyncio", "numba", "filelock"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # WebView2 opens speculative connections and drops them before sending a request;
+    # websockets logs each as a failed handshake with a traceback. Not actionable.
+    logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 
 
 def log_event(event: str, *, severity: int = logging.INFO, logger: str = "sugar", **fields: Any) -> None:

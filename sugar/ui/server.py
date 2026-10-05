@@ -14,6 +14,7 @@ import http
 import json
 import logging
 import mimetypes
+import os
 import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -42,7 +43,8 @@ class UIServer:
         self._port = port
         self._on_command = on_command
         self._snapshot = snapshot
-        self.token = secrets.token_urlsafe(24)
+        # A fixed token can be supplied for automation/tests; normally it is random per launch.
+        self.token = os.environ.get("SUGAR_UI_TOKEN") or secrets.token_urlsafe(24)
         self._clients: set[ServerConnection] = set()
         self._queue: list[dict[str, Any]] = []
         self._server: Server | None = None
