@@ -247,3 +247,135 @@ copy), `test/` (MLX tests), `practice_project/`, `beep.mp3`, stale
 removing `chroma_db/` and untracking it. Fold `prompt.txt`'s style guidance
 into the persona, then remove it. Repoint `.vscode/` at Sugar. Move the
 legacy chat log into `data/legacy/`.
+
+---
+
+# Part 2 — Computer-control audit (V2.1)
+
+Audit date: 2026-10-06, branch `rework/sugar-v2` @ `d735377`. Evidence comes from
+the code, from `data/logs/sugar.jsonl` (the user's own voice session), and from
+probes run on this machine (Windows 11 26200, Brave as default browser, Store
+Notepad 11.2607).
+
+## 9. What V2 had for computer control
+
+| Piece | Where | What it really did |
+|---|---|---|
+| `keyboard.type` | `tools/desktop.py` | Waited a fixed 1.5 s, copied the text to the clipboard with pyperclip, pressed Ctrl+V with pyautogui. No target window, no focus, no check that anything arrived. Restored only the clipboard's text. Group `agent` only. |
+| `keyboard.press` | `tools/desktop.py` | `pyautogui.hotkey` over a fixed allow-list of 60 key names; always SENSITIVE (asks first when proposed by a model). |
+| `app.open` | `tools/desktop.py` + `tools/apps.py` | Start-menu catalog (`Get-StartApps`) and `shell:AppsFolder` launch. Fire and forget: no window wait, no focus, no "already running" check. |
+| `app.close` | same | `taskkill /IM <image>`, a process-level close of every window of that image name, with no verification. Group `agent` only. |
+| `browser.open_url` / `web.search` | `tools/web.py` | `webbrowser.open` (default browser, always a new tab). Accepts any URL the model writes. |
+| `media.*` | `tools/media.py` | Spotify Web API only; pyautogui media keys as fallback. No YouTube. |
+| `screen.capture`, `clipboard.*` | `tools/desktop.py` | pyautogui screenshot, pyperclip text clipboard. |
+| Window management, tabs, UI Automation, focus tracking, desktop context | — | **None.** Nothing in V2 enumerated windows or knew what was in the foreground. |
+
+## 10. Why the reported failures happen
+
+**10.1 Real-time typing.** Four separate causes, all visible in the user's log:
+
+1. Grammar: the fast path only accepted utterances starting with
+   `type / type out / type in / write down / dictate`. "Write directly into
+   the notebook." and "…and start writing a Fibonacci code" went to the router.
+2. Routing: those requests were classified `chat` (the `_AGENT` regex looks
+   for files/terminal words), and the chat toolset (`CHAT_TOOLS`) does not
+   contain `keyboard.type`. The model had no way to type. Log:
+   `Open a new notepad and start writing a Fibonacci code…` produced only
+   `app.open(Notepad)`; `write directly into the notebook.` produced no tool call.
+3. No target: even when `keyboard.type` ran, it pasted into whatever had
+   focus, which while talking to Sugar is often Sugar's own window, after a
+   blind 1.5 s sleep.
+4. The OS layer is harder than it looks. Measured on this machine, the
+   Windows 11 Notepad editor (`RichEditD2DPT`) garbles injected input that
+   arrives in a batch:
+   `KEYEVENTF_UNICODE` batches came out as `"Hello gggar\riiis tttttest…"`,
+   and batched `Shift + key` lost the Shift (`"Hello sugar"`, `")"` → `"0"`)
+   because the app reads the *current* modifier state when it processes the
+   message. Sending each event on its own with a 4 ms gap was exact in
+   every run (113-character sample with symbols and newlines).
+
+**10.2 Closing applications and windows.** `app.close` exists but (a) is not in
+the chat toolset, (b) is reachable from the fast path only when the name
+resolves in the Start-menu catalog ("brave browser" did not), (c) works on
+process image names with `taskkill`, so a process and a window are the same
+thing to it, and (d) has nothing to resolve "this", "that" or "it" against.
+Log: `Now close all the tabs and close Brave` → no tool;
+`Stop playing music on Spotify and close Spotify.` → no tool (compound commands
+were not understood by the grammar and the chat model did nothing).
+
+**10.3 Browser tabs.** There is no browser subsystem: no idea which browsers
+are installed (Chrome is **not** installed here; Brave is the default), no tab
+list, no back/forward/reload/close-tab actions, no verification. Every page
+opened with `webbrowser.open` became a new tab in the default browser.
+
+**10.4 YouTube → Rick Astley.** There is no hard-coded URL anywhere in the
+repository (searched for `Rick`, `Astley`, `dQw4w9WgXcQ`, `youtube.com/watch`,
+`youtu.be`; the only hits are the CMU pronouncing dictionary and the
+`youtube.com` home page in the site list). The log shows the cause:
+
+```text
+"Be brave, search for YouTube and open any video of your choice."
+  route chat → model gpt-oss-120b → browser.open_url(https://www.youtube.com/watch?v=dQw4w9WgXcQ)
+"Open another YouTube video of your choice on Brave"
+  route chat → browser.open_url(https://www.youtube.com/watch?v=dQw4w9WgXcQ)   (again)
+"Let's open up a song by a Hindi artist."
+  → browser.open_url(https://www.youtube.com/watch?v=J8a3c6ZVb8w)              (invented ID)
+```
+
+The model had no way to *search* YouTube, `browser.open_url` accepted any URL
+it wrote, and nothing checked what opened. Language models reproduce the most
+memorised video ID on the internet when asked to make one up. Two more gaps
+fed it: `media.play` was Spotify-only and its slot filter rejected any query
+containing "video", and "on YouTube" was not parsed at all.
+
+**10.5 Installed automation libraries** (venv, before this pass):
+`comtypes 1.4.17` (pulled in by pycaw, so UI Automation is already
+available), `psutil 7.2.2`, `pyautogui 0.9.54` (+ PyGetWindow, PyScreeze,
+pymsgbox, pytweening, MouseInfo), `pyperclip`, `pillow`. Not installed:
+pywin32, pywinauto, uiautomation, pynput, Playwright, Selenium, any WinRT
+projection.
+
+**10.6 Dependencies that are genuinely needed.**
+
+| Need | Choice | Why |
+|---|---|---|
+| Windows, focus, input, clipboard, processes | `ctypes` (stdlib) | Win32 `EnumWindows`, `SetForegroundWindow`, `SendInput`, `ShowWindow`, `PostMessage(WM_CLOSE)`, clipboard API. pywin32/pywinauto would add nothing these calls don't already do. |
+| Tabs, address bar, dialogs, page elements | UI Automation through `comtypes` (already installed) | Probe: Brave exposes every tab as a `TabItem` with a selection state and an invokable **Close** button, and the omnibox as an `Edit` with a `ValuePattern` (12–52 ms per query). Notepad exposes its tabs (with "Modified"/"Unmodified") and its document text through `TextPattern`. |
+| What is playing, targeted pause/resume | `winrt-Windows.Media.Control` (+ runtime, Foundation, Collections; ~0.5 MB) | Windows' own media-session API (SMTC). Lists Spotify, browsers and other players with title, artist and playing state, and controls one session without touching the others. Probe: 34 ms to list sessions. |
+| Process lookup | `psutil` (already installed, now declared) | Window → process name; force-close process trees. |
+
+Not added: **Playwright/Selenium** drive a separate automation browser and
+profile, not the Brave window the user is looking at; Chromium ignores remote
+debugging on the default profile since version 136, so attaching to the
+user's own browser over CDP is not an option. UI Automation reaches the real
+window instead. pyautogui is replaced by the `SendInput` engine and is no
+longer used.
+
+## 11. V2.1 design
+
+```text
+voice → STT → FastPath grammar (deterministic, uses live desktop context)
+              │  "close this tab", "open notepad and type …", "play X on YouTube"
+              └→ Router → agent model (computer toolset + desktop context in the prompt)
+                         │
+                         ▼
+               ToolRegistry → PermissionManager → ToolExecutor
+                         │
+                         ▼
+         ComputerControl (one "sugar-desktop" worker thread, COM MTA, DPI aware)
+           ├─ WindowManager       EnumWindows, focus (with fallbacks), min/max/restore, WM_CLOSE, snap
+           ├─ KeyboardController  layout-aware SendInput, paced events, realtime / paste, hotkeys
+           ├─ Clipboard           Win32 clipboard, full snapshot + restore around pastes
+           ├─ ApplicationController Start-menu catalog + windows: open/focus/close/force-close
+           ├─ BrowserController   installed/default browser, tabs (UIA), navigation, search engines
+           ├─ MediaController     SMTC sessions + Spotify API + YouTube (search → rank → open → verify)
+           ├─ ScreenController    capture, UIA inspect, click/scroll/drag; VisionProvider interface
+           └─ DesktopContext      foreground tracker (WinEvent hook), "this/that/it", action history
+                         │
+                         ▼
+               ComputerActionResult(success, action, target, details, verified, error)
+```
+
+Control levels, lowest that works wins: (1) Win32 API, (2) UI Automation,
+(3) keyboard/mouse injection, (4) vision (interface only; no model is wired
+in, so nothing pretends to "see").
