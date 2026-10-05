@@ -2,10 +2,20 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Package: practice",
+            "name": "Sugar",
             "type": "debugpy",
             "request": "launch",
-            "module": "practice"
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--debug"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Sugar (text only)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--no-voice", "--window", "edge"],
+            "console": "integratedTerminal"
         }
     ]
 }

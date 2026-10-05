@@ -7,8 +7,6 @@ import subprocess
 import numpy as np
 from scipy.io.wavfile import read
 import torch
-import torchaudio
-import librosa
 from melo.text import cleaned_text_to_sequence, get_bert
 from melo.text.cleaner import clean_text
 from melo import commons
@@ -223,16 +221,6 @@ def plot_alignment_to_numpy(alignment, info=None):
 def load_wav_to_torch(full_path):
     sampling_rate, data = read(full_path)
     return torch.FloatTensor(data.astype(np.float32)), sampling_rate
-
-
-def load_wav_to_torch_new(full_path):
-    audio_norm, sampling_rate = torchaudio.load(full_path, frame_offset=0, num_frames=-1, normalize=True, channels_first=True)
-    audio_norm = audio_norm.mean(dim=0)
-    return audio_norm, sampling_rate
-
-def load_wav_to_torch_librosa(full_path, sr):
-    audio_norm, sampling_rate = librosa.load(full_path, sr=sr, mono=True)
-    return torch.FloatTensor(audio_norm.astype(np.float32)), sampling_rate
 
 
 def load_filepaths_and_text(filename, split="|"):

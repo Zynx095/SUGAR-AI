@@ -1,7 +1,6 @@
 import torch
 import os
 from . import utils
-from cached_path import cached_path
 from huggingface_hub import hf_hub_download
 
 DOWNLOAD_CKPT_URLS = {
@@ -52,6 +51,8 @@ def load_or_download_config(locale, use_hf=True, config_path=None):
             )
         else:
             assert language in DOWNLOAD_CONFIG_URLS
+            from cached_path import cached_path  # optional dependency, only for non-HF downloads
+
             config_path = cached_path(DOWNLOAD_CONFIG_URLS[language])
     return utils.get_hparams_from_file(config_path)
 
@@ -66,9 +67,13 @@ def load_or_download_model(locale, device, use_hf=True, ckpt_path=None):
             )
         else:
             assert language in DOWNLOAD_CKPT_URLS
+            from cached_path import cached_path  # optional dependency, only for non-HF downloads
+
             ckpt_path = cached_path(DOWNLOAD_CKPT_URLS[language])
     return torch.load(ckpt_path, map_location=device)
 
 
 def load_pretrain_model():
+    from cached_path import cached_path  # optional dependency, training only
+
     return [cached_path(url) for url in PRETRAINED_MODELS.values()]
