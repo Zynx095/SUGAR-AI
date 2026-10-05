@@ -246,13 +246,24 @@ class WindowManager:
         self._context.pending_dialog = None
         if choice == "cancel":
             return R.ok("dialog.answer", prompt.app, f"Cancelled. {prompt.app} stays open.", button=button)
+        owner = self._backend.get_window(prompt.hwnd)
         deadline = time.monotonic() + self._close_timeout
         while time.monotonic() < deadline:
+            self._sleep(0.1)
             if not self._backend.is_window(prompt.hwnd):
                 self._context.forget_window(prompt.hwnd)
                 verb = "Saved and closed" if choice == "save" else "Closed"
                 return R.ok("dialog.answer", prompt.app, f"{verb} {prompt.app}.", button=button)
-            self._sleep(0.1)
+            front = self._backend.get_window(self._backend.foreground())
+            if (choice == "save" and front is not None and owner is not None and front.hwnd != owner.hwnd
+                    and front.pid == owner.pid and "save" in front.title.lower()):
+                return R(True, "dialog.answer", prompt.app, f"{prompt.app} is asking where to save it. Tell me a "
+                         "file name, or pick a folder.", False, None, {"button": button, "waiting_for": "save_dialog"})
+            remaining = self._backend.buttons(prompt.hwnd)
+            if not any(_SAVE_WORDS.match(b) for b in remaining) or not any(_DISCARD_WORDS.match(b) for b in remaining):
+                # The prompt is gone but the window stays: a tab closed and others remain.
+                verb = "Saved and closed" if choice == "save" else "Closed"
+                return R.ok("dialog.answer", prompt.app, f"{verb} the document in {prompt.app}.", button=button)
         return R(True, "dialog.answer", prompt.app, f"Pressed {button}.", False, None, {"button": button})
 
     def snap(self, target: str | int | None, where: str) -> R:

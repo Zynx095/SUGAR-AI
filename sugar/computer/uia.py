@@ -107,7 +107,7 @@ class Accessibility:
         while queue:
             element, depth = queue.popleft()
             child = self._safe(lambda e=element: walker.GetFirstChildElement(e))
-            while child is not None:
+            while child:  # comtypes returns a NULL (falsy) pointer, not None, at the end of a level
                 seen += 1
                 control_type = self._safe(lambda c=child: c.CurrentControlType, 0)
                 if want(child, control_type):
@@ -189,7 +189,7 @@ class Accessibility:
             return False
         condition = auto.CreatePropertyCondition(U.UIA_ControlTypePropertyId, U.UIA_ButtonControlTypeId)
         button = self._safe(lambda: items[index].FindFirst(U.TreeScope_Descendants, condition))
-        if button is None:
+        if not button:  # None or a NULL COM pointer
             return False
         invoke = self._pattern(button, "invoke")
         return bool(invoke is not None and self._safe(lambda: invoke.Invoke() or True, False))

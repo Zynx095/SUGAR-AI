@@ -56,6 +56,7 @@ class FakeWindow:
     selected: int = 0
     omnibox: str | None = None  # text while the address bar has focus
     dialog: list[str] | None = None  # buttons of a modal "save changes?" prompt
+    dialog_scope: str = "window"  # what answering it closes: the window or the current tab
     minimized: bool = False
     maximized: bool = False
     rect: tuple[int, int, int, int] = (100, 100, 900, 700)
@@ -169,6 +170,13 @@ class FakeDesktop:
             window.dialog = ["Save", "Don't save", "Cancel"]
             return
         self._remove(hwnd)
+
+    def _close_document(self, window: FakeWindow) -> None:
+        if len(window.tabs) > 1:
+            window.tabs.pop()
+            window.text = ""
+        else:
+            self._remove(window.hwnd)
 
     def _remove(self, hwnd: int) -> None:
         self.windows.pop(hwnd, None)
@@ -323,6 +331,11 @@ class FakeDesktop:
         elif ctrl and vk == ord("N"):
             window.tabs.append(Tab("Untitled", ""))
             window.text = ""
+        elif ctrl and vk == ord("W"):
+            if window.unsaved:
+                window.dialog, window.dialog_scope = ["Save", "Don't save", "Cancel"], "tab"
+            else:
+                self._close_document(window)
         elif ctrl and vk == ord("Z"):
             window.text = ""
         elif ctrl and vk == VK_END:
@@ -494,12 +507,13 @@ class FakeDesktop:
         if window is None:
             return None
         if window.dialog and name in window.dialog:
-            window.dialog = None
-            if name == "Save":
+            scope, window.dialog = window.dialog_scope, None
+            if name in ("Save", "Don't save"):
                 window.unsaved = False
-                self._remove(hwnd)
-            elif name == "Don't save":
-                self._remove(hwnd)
+                if scope == "tab":
+                    self._close_document(window)
+                else:
+                    self._remove(hwnd)
             return name
         if window.kind == "browser" and name.lower() == "skip":
             return "Skip Ad"

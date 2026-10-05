@@ -296,6 +296,8 @@ class WindowsDesktop:
 
     def chord_for(self, char: str, hwnd: int) -> KeyChord | None:
         """The key (and Shift/Ctrl/Alt) that types ``char`` on the target window's keyboard layout."""
+        if len(char) != 1 or ord(char) > 0xFFFF:
+            return None  # outside the BMP (emoji): no key produces it, and it doesn't fit a WCHAR
         _, thread = w.window_pid(hwnd) if hwnd else (0, 0)
         layout = w.user32.GetKeyboardLayout(thread)
         result = w.user32.VkKeyScanExW(char, layout)

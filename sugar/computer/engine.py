@@ -14,6 +14,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -24,11 +25,12 @@ from sugar.computer.backend import DesktopBackend, NullDesktop
 from sugar.computer.browser import BrowserController, BrowserRegistry
 from sugar.computer.context import DesktopContext
 from sugar.computer.keyboard import KeyboardController, TypingSettings
+from sugar.computer.keys import VK_CONTROL
 from sugar.computer.media import MediaController
 from sugar.computer.results import ComputerActionResult
 from sugar.computer.screen import ScreenController
 from sugar.computer.spotify import SpotifyController
-from sugar.computer.windows import WindowManager, is_browser
+from sugar.computer.windows import WindowManager, display_name, is_browser
 from sugar.computer.youtube import YouTubeSearch
 
 if TYPE_CHECKING:
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
+TABBED_EDITORS = {"notepad"}  # "close this" closes the document in front, like a browser tab
 REFERENCES = {"this", "that", "it", "current", "active", "this window", "that window", "this app", "that app",
               "that application", "this application", "this one", "that one", "the current window", "here",
               "last_opened", "the app i just opened", "what i just opened", "the one i just opened"}
@@ -160,6 +163,10 @@ class ComputerControl:
                 scope = "window"
             if scope in ("auto", "tab") and is_browser(window):
                 return self.browser.close_tab(hwnd=window.hwnd)
+            if scope in ("auto", "tab") and window.app.lower() in TABBED_EDITORS:
+                tabs = self.backend.tabs(window.hwnd)
+                if len(tabs) > 1:  # close the document in front, not the user's other tabs
+                    return self._close_editor_tab(window, len(tabs))
             return self.windows.close_window(window)
         if scope == "tab":
             return self.browser.close_tab(match=name)
@@ -176,6 +183,22 @@ class ComputerControl:
         if matches:
             return self.windows.close_window(matches[0])
         return ComputerActionResult.fail("window.close", name, f"I can't find {name} to close.")
+
+    def _close_editor_tab(self, window, tab_count: int) -> ComputerActionResult:
+        if self.backend.foreground() != window.hwnd and not self.backend.activate(window.hwnd):
+            return ComputerActionResult.fail("window.close", window.app, "I couldn't bring it to the front.")
+        self.keyboard.chord([VK_CONTROL], ord("W"))
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            time.sleep(0.08)
+            if not self.backend.is_window(window.hwnd) or len(self.backend.tabs(window.hwnd)) < tab_count:
+                self.context.note_action("window.close", None)
+                return ComputerActionResult.ok("window.close", window.app,
+                                               f"Closed the document in {display_name(window)}.")
+        prompt = self.windows.detect_prompt(window)
+        if prompt is not None:
+            return prompt
+        return ComputerActionResult.fail("window.close", window.app, "The document didn't close.")
 
     def focus(self, name: str | None = None) -> ComputerActionResult:
         """Bring an app, a browser tab or a window to the front ("switch to Notepad", "go to the YouTube tab")."""

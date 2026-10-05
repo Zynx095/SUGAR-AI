@@ -224,6 +224,31 @@ def test_close_with_unsaved_changes_asks_and_answers(tmp_path):
     assert computer.context.pending_dialog is None
 
 
+def test_close_this_in_tabbed_notepad_closes_only_the_document(tmp_path):
+    from fake_desktop import Tab
+
+    computer, desktop = make(tmp_path)
+    editor = desktop.add(notepad("the user's notes"))
+    editor.tabs = [Tab("notes.txt", ""), Tab("Untitled", "")]
+    result = computer.close("this")
+    assert result.success and result.verified and editor.hwnd in desktop.windows
+    assert [t.title for t in editor.tabs] == ["notes.txt"]
+
+
+def test_unsaved_tab_prompt_is_answered_without_closing_other_tabs(tmp_path):
+    from fake_desktop import Tab
+
+    computer, desktop = make(tmp_path)
+    editor = desktop.add(notepad("dictated text"))
+    editor.tabs = [Tab("notes.txt", ""), Tab("Untitled", "")]
+    editor.unsaved = True
+    asked = computer.close("this")
+    assert asked.data.get("waiting_for") == "save_prompt" and "unsaved changes" in asked.details
+    answered = computer.windows.answer_dialog("discard")
+    assert answered.success and answered.verified
+    assert editor.hwnd in desktop.windows and [t.title for t in editor.tabs] == ["notes.txt"]
+
+
 def test_window_list_summary(tmp_path):
     computer, desktop = make(tmp_path)
     desktop.add(notepad())
