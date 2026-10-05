@@ -24,6 +24,7 @@ import re
 import time
 import uuid
 from collections import deque
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -222,6 +223,8 @@ class ConversationManager:
         self._transcribing = 0
         self.conversation_id = self._pick_conversation()
         permissions.on_request = self._ask_permission
+        # "stop" when Sugar is idle: the app pauses whatever media is playing (returns what to say, or None).
+        self.on_idle_stop: Callable[[], Awaitable[str | None]] | None = None
         sessions.on_announce = self.announce
         bus.subscribe("speech.*", self._on_speech_event)
         bus.subscribe("tool.*", self._on_tool_event)
@@ -544,6 +547,7 @@ class ConversationManager:
         name = intent.name
         turn = self._turn
         was_busy = turn is not None and (turn.used_tools or time.perf_counter() - turn.started > 1.5)
+        idle = turn is None and not self._speech.speaking and self._permissions.pending is None
         if name in ("control.stop", "control.wait"):
             self._speech.cancel()
             if turn is not None:
@@ -553,6 +557,13 @@ class ConversationManager:
                 await self.quick_reply("Yeah?")
             elif was_busy:
                 await self.quick_reply("Stopped.")
+            elif idle and name == "control.stop" and self.on_idle_stop is not None:
+                # Sugar had nothing to stop, so "stop" means the music or video that's playing.
+                reply = await self.on_idle_stop()
+                if reply:
+                    await self.quick_reply(reply)
+                else:
+                    self._settle_state("stopped")
             else:
                 self._settle_state("stopped")
         elif name == "control.sleep":

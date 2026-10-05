@@ -223,3 +223,30 @@ def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
     assert "unsaved changes" in replies[1]["text"]  # "close this" = Notepad, which asks first
     assert texts["close this"] == "Hello, this is Sugar AI."
     assert texts["don't save"] is None and "Closed Notepad" in replies[2]["text"]
+
+
+def test_stop_with_nothing_to_stop_pauses_the_music(settings, monkeypatch):
+    import sugar.computer.engine as engine
+    from sugar.app.application import SugarApp
+    from sugar.computer.backend import MediaSession
+
+    desktop = FakeDesktop()
+    desktop.sessions = [MediaSession("SpotifyAB.SpotifyMusic!Spotify", "Starboy", "The Weeknd", "playing", True)]
+    monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
+    settings.ui.enabled = False
+
+    async def scenario():
+        app = SugarApp(settings, voice=False)
+        app.audio_output = False
+        app.apps.loaded_at = 9e12
+        await app.start()
+        replies = []
+        app.bus.subscribe("assistant.message", lambda e: replies.append(e.data))
+        await app.conversation.handle_text("stop")
+        await asyncio.sleep(1.5)
+        await app.shutdown()
+        return replies
+
+    replies = run(scenario())
+    assert desktop.media_log == [("SpotifyAB.SpotifyMusic!Spotify", "pause")]
+    assert replies and replies[-1]["text"].startswith("Paused")

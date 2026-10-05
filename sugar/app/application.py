@@ -112,6 +112,7 @@ class SugarApp:
             self.permissions, self.memory, self.working, self.sessions, self.shared_state,
             stt=self.stt, pipeline=self.pipeline,
         )
+        self.conversation.on_idle_stop = self._stop_media
         self.components: dict[str, dict[str, Any]] = {}
         self.ui = None
         self.ui_ready = threading.Event()  # set once the UI server is listening (window can open)
@@ -149,6 +150,16 @@ class SugarApp:
     def _extra_context(self) -> str:
         parts = [self.sessions.describe_for_context(), self.computer.describe()]
         return "\n".join(p for p in parts if p)
+
+    async def _stop_media(self) -> str | None:
+        """"Stop" with nothing of Sugar's to stop: pause what's playing, if anything is."""
+        if not self.computer.available:
+            return None
+        sessions = await self.computer.media.sessions()
+        if not any(s.status == "playing" for s in sessions):
+            return None
+        result = await self.computer.media.control("pause")
+        return result.details if result.success else None
 
     # ------------------------------------------------------------------ status
 
