@@ -117,7 +117,15 @@ class SugarApp:
         self.ui_ready = threading.Event()  # set once the UI server is listening (window can open)
         self.audio_output = True  # False for text-only runs
         self._stopping = asyncio.Event()
+        self._background: set[asyncio.Task] = set()
         self.loop: asyncio.AbstractEventLoop | None = None
+
+    def _spawn(self, coro) -> asyncio.Task:
+        """Start a background task that shutdown() cancels and awaits (no orphaned subprocesses)."""
+        task = asyncio.create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return task
 
     # ------------------------------------------------------------------ desktop context
 
@@ -172,8 +180,8 @@ class SugarApp:
                             f"YouTube search via {status['youtube_search']}")
         else:
             self._component("computer", "disabled", "desktop control is off for this run")
-        asyncio.create_task(self._background_discovery())
-        asyncio.create_task(self._check_providers())
+        self._spawn(self._background_discovery())
+        self._spawn(self._check_providers())
         await self._load_audio()
 
     async def _load_audio(self) -> None:
@@ -272,6 +280,10 @@ class SugarApp:
 
     async def shutdown(self) -> None:
         log.info("shutting down")
+        for task in list(self._background):
+            task.cancel()
+        if self._background:
+            await asyncio.gather(*self._background, return_exceptions=True)
         await self.sessions.shutdown()
         self.computer.stop()
         if self.pipeline is not None:

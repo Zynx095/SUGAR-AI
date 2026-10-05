@@ -93,7 +93,13 @@ async def probe_claude_cli(executable: str, timeout_s: float = 30.0) -> ClaudeCL
             env=clean_child_env(),
             creationflags=background_creationflags(),
         )
-        out, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+        try:
+            out, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+        except BaseException:  # timeout or cancellation: don't leave the child (and its pipes) behind
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
         return out.decode("utf-8", "replace")
 
     version_text = await run("--version")
