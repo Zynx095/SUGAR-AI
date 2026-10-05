@@ -35,13 +35,18 @@ S = AssistantState
 
 TRANSITIONS: dict[AssistantState, frozenset[AssistantState]] = {
     S.IDLE: frozenset({S.LISTENING, S.THINKING, S.TOOL_EXECUTION, S.SPEAKING, S.PAUSED, S.ERROR}),
-    S.LISTENING: frozenset({S.TRANSCRIBING, S.IDLE, S.INTERRUPTED, S.PAUSED, S.ERROR}),
+    # The user may start or stop talking while Sugar is busy, so LISTENING can return to work states.
+    S.LISTENING: frozenset({S.TRANSCRIBING, S.IDLE, S.INTERRUPTED, S.THINKING, S.TOOL_EXECUTION, S.SPEAKING,
+                            S.PAUSED, S.ERROR}),
     S.TRANSCRIBING: frozenset({S.THINKING, S.TOOL_EXECUTION, S.SPEAKING, S.LISTENING, S.IDLE, S.PAUSED, S.ERROR}),
-    S.THINKING: frozenset({S.SPEAKING, S.TOOL_EXECUTION, S.IDLE, S.INTERRUPTED, S.PAUSED, S.ERROR}),
-    S.TOOL_EXECUTION: frozenset({S.THINKING, S.SPEAKING, S.IDLE, S.INTERRUPTED, S.PAUSED, S.ERROR}),
+    S.THINKING: frozenset({S.SPEAKING, S.TOOL_EXECUTION, S.LISTENING, S.TRANSCRIBING, S.IDLE, S.INTERRUPTED,
+                           S.PAUSED, S.ERROR}),
+    S.TOOL_EXECUTION: frozenset({S.THINKING, S.SPEAKING, S.LISTENING, S.TRANSCRIBING, S.IDLE, S.INTERRUPTED,
+                                 S.PAUSED, S.ERROR}),
+    # Speech is never silently replaced by listening: the user talking over Sugar is an interruption.
     S.SPEAKING: frozenset({S.IDLE, S.INTERRUPTED, S.THINKING, S.TOOL_EXECUTION, S.PAUSED, S.ERROR}),
     S.INTERRUPTED: frozenset({S.LISTENING, S.TRANSCRIBING, S.THINKING, S.SPEAKING, S.IDLE, S.PAUSED, S.ERROR}),
-    S.ERROR: frozenset({S.IDLE, S.LISTENING, S.SPEAKING, S.PAUSED}),
+    S.ERROR: frozenset({S.IDLE, S.LISTENING, S.SPEAKING, S.THINKING, S.PAUSED}),
     S.PAUSED: frozenset({S.IDLE}),
 }
 

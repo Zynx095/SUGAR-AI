@@ -44,6 +44,7 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_s: float = 45.0,
         connect_timeout_s: float = 3.0,
         extra_body: dict[str, Any] | None = None,
+        extra_by_purpose: dict[str, dict[str, Any]] | None = None,
         is_local: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -51,6 +52,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self.default_model = default_model
         self.is_local = is_local
         self._extra_body = {k: v for k, v in (extra_body or {}).items() if v is not None}
+        self._extra_by_purpose = extra_by_purpose or {}
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -88,6 +90,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if max_tokens:
             body["max_tokens"] = max_tokens
         body.update(self._extra_body)
+        body.update(self._extra_by_purpose.get(purpose, {}))
 
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as response:

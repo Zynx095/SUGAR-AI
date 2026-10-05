@@ -65,6 +65,7 @@ class STTSettings(BaseModel):
     language: str = "en"
     partials: bool = True
     partial_interval_ms: int = 700
+    hotwords: bool = False  # bias Whisper toward `vocabulary` (raises hallucinations on noise)
     vocabulary: list[str] = Field(
         default_factory=lambda: ["Sugar", "Claude", "Claude Code", "VS Code", "Spotify", "GitHub"]
     )
@@ -89,7 +90,11 @@ class FreeLLMSettings(BaseModel):
     api_key_env: str = "FREELLMAPI_API_KEY"
     chat_model: str = "auto"
     smart_model: str = "auto:smart"
-    reasoning_effort: str | None = "low"
+    # Forwarded as `reasoning_effort`; FreeLLMAPI also uses it to pick backends. "none" keeps chat on
+    # fast non-thinking models (measured TTFT ~1.2 s vs ~2 s for "low").
+    effort_by_purpose: dict[str, str] = Field(
+        default_factory=lambda: {"chat": "none", "agent": "low", "reasoning": "medium"}
+    )
     timeout_s: float = 45.0
     connect_timeout_s: float = 3.0
 

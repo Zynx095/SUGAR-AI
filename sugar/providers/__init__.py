@@ -31,7 +31,8 @@ def build_provider_pool(settings: Settings, bus: EventBus) -> ProviderPool:
             llm.freellm.chat_model,
             timeout_s=llm.freellm.timeout_s,
             connect_timeout_s=llm.freellm.connect_timeout_s,
-            extra_body={"reasoning_effort": llm.freellm.reasoning_effort},
+            extra_by_purpose={purpose: {"reasoning_effort": effort}
+                              for purpose, effort in llm.freellm.effort_by_purpose.items() if effort},
         )
 
     if llm.ollama.enabled:

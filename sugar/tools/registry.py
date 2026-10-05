@@ -174,9 +174,12 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._tools)
 
-    def tools(self, groups: set[str] | None = None) -> list[Tool]:
-        selected = [t for t in self._tools.values() if groups is None or t.groups & groups]
+    def tools(self, groups: set[str] | None = None, names: set[str] | None = None) -> list[Tool]:
+        selected = [
+            t for t in self._tools.values()
+            if (groups is None or t.groups & groups) and (names is None or t.name in names)
+        ]
         return sorted(selected, key=lambda t: t.name)
 
-    def schemas(self, groups: set[str] | None = None) -> list[dict[str, Any]]:
-        return [tool.schema() for tool in self.tools(groups)]
+    def schemas(self, groups: set[str] | None = None, names: set[str] | None = None) -> list[dict[str, Any]]:
+        return [tool.schema() for tool in self.tools(groups, names)]
