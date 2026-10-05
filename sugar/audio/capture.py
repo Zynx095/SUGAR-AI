@@ -31,15 +31,40 @@ def list_input_devices() -> list[dict]:
     return devices
 
 
+def _wasapi_index() -> int | None:
+    for index, api in enumerate(sd.query_hostapis()):
+        if "WASAPI" in api["name"]:
+            return index
+    return None
+
+
 def resolve_device(spec: str | int | None, kind: str) -> int | None:
     """Turn a device index or name fragment into a PortAudio index (None = default)."""
-    if spec is None or spec == "":
-        return None
+    return pick_device(spec, kind, prefer_wasapi=False)[0]
+
+
+def pick_device(spec: str | int | None, kind: str, prefer_wasapi: bool = True) -> tuple[int | None, object | None]:
+    """Choose a device and the host-API settings to open it with.
+
+    WASAPI is preferred because it is several times lower latency than the MME
+    default (measured: ~23 ms vs ~93 ms output), which shortens both time to
+    first audio and how fast Sugar falls silent when interrupted.
+    ``auto_convert`` lets Windows resample, so any stream rate works.
+    """
+    wasapi = _wasapi_index() if prefer_wasapi else None
+    settings = sd.WasapiSettings(auto_convert=True) if wasapi is not None else None
     if isinstance(spec, int):
-        return spec
+        info = sd.query_devices(spec)
+        return spec, settings if wasapi is not None and info["hostapi"] == wasapi else None
+    if spec is None or spec == "":
+        if wasapi is not None:
+            key = "default_input_device" if kind == "input" else "default_output_device"
+            index = sd.query_hostapis(wasapi)[key]
+            if index >= 0:
+                return index, settings
+        return None, None
     channels_key = "max_input_channels" if kind == "input" else "max_output_channels"
     wanted = str(spec).lower()
-    default_api = sd.default.hostapi
     matches = [
         (index, device)
         for index, device in enumerate(sd.query_devices())
@@ -47,9 +72,11 @@ def resolve_device(spec: str | int | None, kind: str) -> int | None:
     ]
     if not matches:
         log.warning("no %s device matches %r; using the system default", kind, spec)
-        return None
-    matches.sort(key=lambda item: item[1]["hostapi"] != default_api)
-    return matches[0][0]
+        return pick_device(None, kind, prefer_wasapi)
+    preferred = wasapi if wasapi is not None else sd.default.hostapi
+    matches.sort(key=lambda item: item[1]["hostapi"] != preferred)
+    index, device = matches[0]
+    return index, settings if wasapi is not None and device["hostapi"] == wasapi else None
 
 
 class MicrophoneStream:
@@ -76,24 +103,33 @@ class MicrophoneStream:
         with self._lock:
             if self._stream is not None:
                 return
-            index = resolve_device(self._device_spec, "input")
-            info = sd.query_devices(index if index is not None else sd.default.device[0], "input")
-            self.device_name = info["name"]
-            try:
-                self._open(index, self.sample_rate)
-                self._resampler = None
-            except sd.PortAudioError:
-                native = int(info["default_samplerate"])
-                import soxr
+            attempts = [pick_device(self._device_spec, "input"), pick_device(self._device_spec, "input", False)]
+            last_error: Exception | None = None
+            for index, extra in attempts:
+                info = sd.query_devices(index if index is not None else sd.default.device[0], "input")
+                self.device_name = info["name"]
+                try:
+                    self._open(index, self.sample_rate, extra)
+                    self._resampler = None
+                    break
+                except sd.PortAudioError as exc:
+                    last_error = exc
+                try:  # the device refuses 16 kHz: capture natively and resample
+                    native = int(info["default_samplerate"])
+                    import soxr
 
-                log.info("device %s rejects %d Hz; capturing at %d Hz and resampling", self.device_name,
-                         self.sample_rate, native)
-                self._resampler = soxr.ResampleStream(native, self.sample_rate, 1, dtype="float32")
-                self._open(index, native)
+                    self._resampler = soxr.ResampleStream(native, self.sample_rate, 1, dtype="float32")
+                    self._open(index, native, extra)
+                    log.info("capturing %s at %d Hz and resampling", self.device_name, native)
+                    break
+                except sd.PortAudioError as exc:
+                    last_error = exc
+            else:
+                raise RuntimeError(f"could not open a microphone: {last_error}")
             self.last_frame_time = time.monotonic()
             log.info("microphone open: %s", self.device_name)
 
-    def _open(self, index: int | None, rate: int) -> None:
+    def _open(self, index: int | None, rate: int, extra: object | None = None) -> None:
         blocksize = self.block_size if rate == self.sample_rate else 0
         stream = sd.InputStream(
             device=index,
@@ -102,6 +138,7 @@ class MicrophoneStream:
             dtype="float32",
             blocksize=blocksize,
             latency="low",
+            extra_settings=extra,
             callback=self._callback,
         )
         stream.start()

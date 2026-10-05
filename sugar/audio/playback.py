@@ -24,7 +24,7 @@ from typing import Any
 import numpy as np
 import sounddevice as sd
 
-from sugar.audio.capture import resolve_device
+from sugar.audio.capture import pick_device
 
 log = logging.getLogger(__name__)
 
@@ -70,20 +70,31 @@ class AudioPlayer:
     def start(self) -> None:
         if self._stream is not None:
             return
-        index = resolve_device(self._device_spec, "output")
-        info = sd.query_devices(index if index is not None else sd.default.device[1], "output")
-        self.device_name = info["name"]
-        self._stream = sd.OutputStream(
-            device=index,
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            blocksize=self._block,
-            latency="low",
-            callback=self._callback,
-        )
-        self._stream.start()
-        log.info("speaker open: %s @ %d Hz", self.device_name, self.sample_rate)
+        last_error: Exception | None = None
+        for prefer_wasapi in (True, False):
+            index, extra = pick_device(self._device_spec, "output", prefer_wasapi)
+            info = sd.query_devices(index if index is not None else sd.default.device[1], "output")
+            try:
+                stream = sd.OutputStream(
+                    device=index,
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=self._block,
+                    latency="low",
+                    extra_settings=extra,
+                    callback=self._callback,
+                )
+                stream.start()
+            except sd.PortAudioError as exc:
+                last_error = exc
+                continue
+            self._stream = stream
+            self.device_name = info["name"]
+            log.info("speaker open: %s @ %d Hz (%.0f ms output latency)", self.device_name, self.sample_rate,
+                     stream.latency * 1000)
+            return
+        raise RuntimeError(f"could not open a speaker: {last_error}")
 
     def stop_stream(self) -> None:
         stream, self._stream = self._stream, None
