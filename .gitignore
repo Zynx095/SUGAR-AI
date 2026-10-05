@@ -167,3 +167,4 @@ Sugar_Chat_Logs.txt
 # --- Sugar runtime data (logs, memory db, sessions, metrics) ---
 data/
 .ruff_cache/
+sugar.yaml
