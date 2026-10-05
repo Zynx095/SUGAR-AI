@@ -317,6 +317,14 @@ class SugarApp:
             return {"ok": result.ok, "summary": result.summary}
         if cmd == "snapshot":
             return self.snapshot()
+        if cmd == "open_url":
+            url = str(message.get("url", ""))
+            if not url.startswith(("http://", "https://")):
+                return {"ok": False, "error": "only web links can be opened"}
+            import webbrowser
+
+            await asyncio.to_thread(webbrowser.open, url)
+            return {"ok": True}
         return {"ok": False, "error": f"unknown command {cmd}"}
 
     def apply_setting(self, key: str, value: Any) -> dict[str, Any]:
