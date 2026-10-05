@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from sugar.config.settings import Settings
-from sugar.intelligence.fastpath import FastPath, Intent
+from sugar.intelligence.fastpath import FastPath, Intent, normalize
 from sugar.intelligence.working import WorkingMemory
 
 
@@ -46,12 +46,14 @@ class RouteDecision:
 
 
 # Conversation gets a deliberately small toolset: every schema costs prompt tokens and latency, and the
-# obvious commands (pause, volume, next track…) never reach a model anyway.
+# obvious commands (pause, volume, next track…) never reach a model anyway. Requests that operate the
+# computer route to AGENT, which carries the full computer toolset.
 CHAT_TOOLS = {
     "weather.current", "web.lookup", "browser.search", "app.open", "app.close", "keyboard.type", "media.play",
     "media.pause", "media.now_playing", "memory.remember", "memory.recall", "calc.evaluate", "claude.task",
     "claude.status", "project.open",
 }
+COMPUTER_GROUPS = {"agent", "chat", "computer"}
 
 
 _CODING_WORK = re.compile(
@@ -73,6 +75,20 @@ _AGENT = re.compile(
     r"\b(?:files?|folders?|directory|directories|terminal|command line|powershell|cmd|screenshot|clipboard|desktop|"
     r"downloads folder|documents folder|rename|move (?:the|my|this|that)|delete|copy (?:the|my|this|that) file|"
     r"install|uninstall|run (?:the )?command|and then|then open|after that|on my screen|what's on (?:my|the) screen)\b"
+)
+# Imperatives that operate the computer even when the fast path can't parse the details
+# ("open a new notepad and start writing a Fibonacci function", "close the tab with the error").
+_COMPUTER_VERB = re.compile(
+    r"^(?:open|close|quit|exit|kill|launch|type|press|hit|click|double.click|right.click|scroll|switch|"
+    r"minimi[sz]e|maximi[sz]e|restore|focus|reload|refresh|paste|undo|redo|snap|resize|navigate|play|pause|"
+    r"resume|skip|save|bring up|bring back|go to|search (?:youtube|google|github|for)|watch)\b"
+)
+_COMPUTER_WEAK_VERB = re.compile(r"^(?:write|read|summari[sz]e|find|look up|show me|take|start|put|move|select|copy|"
+                                 r"delete|erase|clear|pull up|put on)\b")
+_COMPUTER_NOUN = re.compile(
+    r"\b(?:notepad|tab|tabs|window|windows|browser|chrome|brave|edge|firefox|youtube|spotify|screen|desktop|"
+    r"clipboard|keyboard|mouse|cursor|vs code|explorer|this page|the page|website|web page|video|app|"
+    r"application|word document|text box|search bar|address bar)\b"
 )
 _REASONING = re.compile(
     r"\b(?:think (?:hard|carefully|deeply|it through)|in detail|step by step|deep dive|pros and cons|trade-?offs?|"
@@ -112,9 +128,11 @@ class Router:
         if coding_context and _REPO_REFERENCE.search(lowered) and self._recent_coding():
             return RouteDecision(Route.CODING, "follow-up to coding work")
 
-        if _AGENT.search(lowered):
+        plain = normalize(text)
+        if (_COMPUTER_VERB.search(plain) or (_COMPUTER_WEAK_VERB.search(plain) and _COMPUTER_NOUN.search(plain))
+                or _AGENT.search(lowered)):
             return RouteDecision(Route.AGENT, "computer operation", chain=chat_chain,
-                                 tool_groups={"agent", "chat"}, purpose="agent")
+                                 tool_groups=COMPUTER_GROUPS, purpose="agent")
 
         words = len(lowered.split())
         if _REASONING.search(lowered) or words >= 35:

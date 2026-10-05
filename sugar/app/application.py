@@ -21,6 +21,7 @@ from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
 from sugar.computer import ComputerControl
 from sugar.computer.apps import AppCatalog
+from sugar.computer.context import BROWSER_PROCESSES
 from sugar.computer.spotify import SpotifyController
 from sugar.config.settings import Settings, save_override
 from sugar.core.events import EventBus
@@ -29,7 +30,7 @@ from sugar.core.metrics import MetricsRecorder, TurnTrace
 from sugar.core.state import StateMachine
 from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.conversation import ConversationManager
-from sugar.intelligence.fastpath import FastPath
+from sugar.intelligence.fastpath import DesktopView, FastPath
 from sugar.intelligence.orchestrator import Orchestrator
 from sugar.intelligence.router import Router
 from sugar.intelligence.working import WorkingMemory
@@ -75,10 +76,10 @@ class SugarApp:
         self.permissions = PermissionManager(settings.permissions, self.bus)
         self.executor = ToolExecutor(self.registry, self.permissions, self.bus)
         self.fastpath = FastPath(resolve_app=self.computer.apps.resolve_name, resolve_project=self.projects.resolve,
-                                 evaluate_math=evaluate_spoken_math)
+                                 evaluate_math=evaluate_spoken_math, desktop=self.desktop_view)
         self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()))
         self.context = ContextBuilder(settings, self.memory, self.working, lambda: self.conversation.conversation_id,
-                                      extra_context=self.sessions.describe_for_context)
+                                      extra_context=self._extra_context)
         self.agent = AgentLoop(self.pool, self.executor, self.registry, self.bus)
         self.orchestrator = Orchestrator(settings, self.bus, self.router, self.pool, self.agent, self.executor,
                                          self.context, self.working, self.sessions, self.shared_state)
@@ -117,6 +118,29 @@ class SugarApp:
         self.audio_output = True  # False for text-only runs
         self._stopping = asyncio.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
+
+    # ------------------------------------------------------------------ desktop context
+
+    def desktop_view(self) -> DesktopView:
+        """Cached desktop facts for the fast-path grammar (no OS calls beyond IsWindow)."""
+        context = self.computer.context
+        active = context.active()
+        dialog = context.pending_dialog
+        search = context.last_search
+        last = self.working.last_action
+        return DesktopView(
+            active_app=active.app if active else None,
+            active_is_browser=bool(active and active.process in BROWSER_PROCESSES),
+            has_dialog=dialog is not None,
+            dialog_kind=dialog.kind if dialog else None,
+            has_search=bool(search and time.time() - search.ts < 1800),
+            last_domain=last.domain if last and time.time() - last.ts < 600 else None,
+            titles=tuple(w.title.lower() for w in context.recent_windows()[:8]),
+        )
+
+    def _extra_context(self) -> str:
+        parts = [self.sessions.describe_for_context(), self.computer.describe()]
+        return "\n".join(p for p in parts if p)
 
     # ------------------------------------------------------------------ status
 

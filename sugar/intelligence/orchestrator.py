@@ -52,6 +52,8 @@ class TurnSummary:
 
 # fast-path intent → (tool name, argument builder)
 def _intent_call(intent: Intent, services_state: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    if intent.call is not None:
+        return intent.call[0], dict(intent.call[1])
     slots = intent.slots
     simple = {
         "system.time": "system.time", "system.date": "system.date", "browser.open": "browser.open",
@@ -165,6 +167,8 @@ class Orchestrator:
             return TurnSummary("command", tools=["coding.no_commit"])
         if intent.name == "project.open" and intent.slots.get("unresolved"):
             return await self._ask_for_project(out, f"I couldn't find a project called {intent.slots.get('name')}.")
+        if intent.name == "sequence":
+            return await self._sequence(intent.slots["steps"], out)
         call = _intent_call(intent, self._state)
         if call is None:
             out.say("I'm not sure how to do that yet.")
@@ -173,6 +177,37 @@ class Orchestrator:
         if name == "keyboard.type":
             out.ack("Typing.")
         return await self._run_tool(out, name, args, "command")
+
+    async def _sequence(self, steps: list[Intent], out: TurnOutput) -> TurnSummary:
+        """Compound commands ("open Notepad and type hello"): run each step, stop at the first failure."""
+        tools: list[str] = []
+        spoke = False
+        out.trace.mark("tool_start")
+        for step in steps:
+            call = _intent_call(step, self._state)
+            if call is None:
+                out.say("I'm not sure how to do part of that.")
+                return TurnSummary("command", tools=tools, ok=False)
+            name, args = call
+            if name == "keyboard.type":
+                out.ack("Typing.")
+            result: ToolResult = await self._executor.execute(name, args, origin="user")
+            tools.append(name)
+            if result.display:
+                out.show(result.display)
+            if not result.ok:
+                out.say(result.summary)
+                out.trace.mark("tool_done")
+                return TurnSummary("command", tools=tools, ok=False)
+            if result.speak:
+                out.say(result.summary)
+                spoke = True
+            if isinstance(result.data, dict) and result.data.get("waiting_for"):
+                break  # an app asked a question ("save changes?"); let the user answer first
+        out.trace.mark("tool_done")
+        if not spoke:
+            out.say("Done.")
+        return TurnSummary("command", tools=tools)
 
     async def _run_tool(self, out: TurnOutput, name: str, args: dict[str, Any], route: str) -> TurnSummary:
         out.trace.mark("tool_start")

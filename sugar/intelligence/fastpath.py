@@ -1,57 +1,28 @@
 """Deterministic command grammar.
 
-Obvious commands ("open Chrome", "pause", "volume 50", "what time is it")
-never touch a language model: they are matched here in well under a
-millisecond and executed directly.
+Obvious commands ("open Chrome", "pause", "volume 50", "close this tab",
+"open Notepad and type hello") never touch a language model: they are matched
+here in well under a millisecond and executed directly.
 
 Unlike the old ``"type" in text`` checks, every pattern is anchored to the
-*whole* utterance after politeness and wake words are stripped, so
-"write me a function" or "what time complexity does quicksort have" can
-never trigger typing or the clock. Anything not matched goes to the router
-and, from there, to a model that can only act through permission-checked
-tools.
+*whole* utterance (or to one clause of a compound command) after politeness
+and wake words are stripped, so "write me a function" or "what time
+complexity does quicksort have" can never trigger typing or the clock.
+Anything not matched goes to the router and, from there, to a model that
+can only act through permission-checked tools.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-_LEADING_FILLER = re.compile(
-    r"^(?:(?:hey|hi|ok|okay|so|um|uh|yo|alright|right|now|and|also|then|actually|just|please|"
-    r"can you|could you|would you|will you|can you please|could you please|would you mind|"
-    r"i want you to|i need you to|i'd like you to|i would like you to|go ahead and|let's|lets)\s+)+"
-)
-_TRAILING_FILLER = re.compile(
-    r"(?:\s+(?:please|for me|now|right now|thanks|thank you|real quick|quickly))+$"
-)
+from sugar.intelligence import computer_grammar as cg
+from sugar.intelligence.intents import DesktopView, Intent, normalize
 
-
-def normalize(text: str) -> str:
-    t = text.lower().strip()
-    t = t.replace("’", "'").replace("‘", "'")
-    t = re.sub(r"[^\w\s'%.:+\-*/×÷^()?]", " ", t)
-    t = re.sub(r"\s+", " ", t).strip(" .,!?")
-    for _ in range(3):
-        stripped = _LEADING_FILLER.sub("", t)
-        stripped = _TRAILING_FILLER.sub("", stripped).strip(" .,!?")
-        if stripped == t:
-            break
-        t = stripped
-    return t
-
-
-@dataclass
-class Intent:
-    name: str
-    slots: dict[str, Any] = field(default_factory=dict)
-    text: str = ""
-
-    @property
-    def domain(self) -> str:
-        return self.name.split(".", 1)[0]
+__all__ = ["DesktopView", "FastPath", "Intent", "normalize"]
 
 
 @dataclass
@@ -73,10 +44,11 @@ _SITES = {
     "reddit": "https://www.reddit.com", "netflix": "https://www.netflix.com", "whatsapp": "https://web.whatsapp.com",
     "google drive": "https://drive.google.com", "drive": "https://drive.google.com", "maps": "https://maps.google.com",
     "google maps": "https://maps.google.com", "amazon": "https://www.amazon.in", "wikipedia": "https://www.wikipedia.org",
+    "instagram": "https://www.instagram.com", "facebook": "https://www.facebook.com", "outlook": "https://outlook.live.com",
 }
 _NOT_SONGS = {"music", "some music", "something", "a song", "song", "it", "that", "this", "the music", "spotify",
               "anything", "something good", "a game", "game", "with me", "a video", "the video", "the next song",
-              "the previous song", "next song", "previous song"}
+              "the previous song", "next song", "previous song", "youtube", "a youtube video", "videos"}
 _NUMBER_WORDS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
     "ten": 10, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
@@ -94,10 +66,14 @@ def _level(slots: dict[str, str]) -> dict[str, Any] | None:
 
 def _song(slots: dict[str, str]) -> dict[str, Any] | None:
     query = slots["query"].strip()
-    if query in _NOT_SONGS or len(query) < 2 or len(query.split()) > 10:
+    if query in _NOT_SONGS or len(query) < 2 or len(query.split()) > 12:
         return None
-    if re.search(r"\b(game|games|video|movie|role|part|along|around|with you|with me)\b", query):
+    if re.search(r"\b(game|games|movie|role|part|along|around|with you|with me|dead|fair|nice|catch|tag|cards|"
+                 r"chess|hide and seek)\b", query):
         return None
+    if re.match(r"^(?:a|an|any|another|some|something|one of)\s+(?:song|songs|track|video|tune|music|playlist|album|"
+                r"good|nice|random|new|popular|hindi|tamil|english)\b", query):
+        return None  # "a song by a Hindi artist": a choice for the model to make, not a search string
     return {"query": query}
 
 
@@ -122,14 +98,21 @@ def _search(slots: dict[str, str]) -> dict[str, Any] | None:
 
 def _site(slots: dict[str, str]) -> dict[str, Any] | None:
     site = slots["site"].strip()
+    browser = None
+    in_browser = re.match(r"^(?P<site>.+?) (?:on|in|using|with) (?P<browser>brave|chrome|google chrome|edge|"
+                          r"microsoft edge|firefox)(?: browser)?$", site)
+    if in_browser:
+        site, browser = in_browser.group("site"), in_browser.group("browser").replace("google ", "").replace("microsoft ", "")
     if site in _SITES:
-        return {"url": _SITES[site], "name": site}
-    if re.fullmatch(r"[\w\-]+(?:\.[\w\-]+)*\.(?:com|org|net|io|dev|ai|app|in|co|gov|edu|me|tv)", site):
-        return {"url": "https://" + site, "name": site}
-    return None
+        url = _SITES[site]
+    elif re.fullmatch(r"[\w\-]+(?:\.[\w\-]+)*\.(?:com|org|net|io|dev|ai|app|in|co|gov|edu|me|tv|so|gg|xyz)(?:/\S*)?", site):
+        url = "https://" + site
+    else:
+        return None
+    return {"url": url, "name": site, **({"browser": browser} if browser else {})}
 
 
-_RULES: list[_Rule] = [
+_RULES_FIRST: list[_Rule] = [
     # ------------------------------------------------------------ conversation control
     _Rule("control.stop", _r(r"stop|stop it|stop talking|stop that|be quiet|quiet|shut up|shush|enough|"
                              r"cancel|cancel (?:that|it)|never ?mind|forget it|nothing|that's all|that is all|"
@@ -160,20 +143,23 @@ _RULES: list[_Rule] = [
                          r"show (?:me )?the (?:diff|changes|git diff)|what are the changes")),
     _Rule("project.list", _r(r"(?:show|list|what are|tell me)(?: me)?(?: all)? (?:my|the) projects|"
                              r"what projects do i have|which projects do i have|my projects")),
+]
+
+_RULES: list[_Rule] = [
     # ------------------------------------------------------------ media
     _Rule("media.pause", _r(r"pause|pause (?:the )?(?:music|song|track|spotify|playback|it)|"
                             r"stop (?:the )?(?:music|song|playback|spotify)")),
     _Rule("media.resume", _r(r"resume|play|unpause|resume (?:the )?(?:music|song|playback|spotify)|"
                              r"play (?:the |some )?music|continue (?:the )?(?:music|song)|play spotify")),
-    _Rule("media.next", _r(r"next|skip|next (?:song|track)|skip (?:this )?(?:song|track|one)?|"
-                           r"play (?:the )?next (?:song|track|one)")),
-    _Rule("media.previous", _r(r"previous|previous (?:song|track)|go back (?:a|one) (?:song|track)|"
+    _Rule("media.next", _r(r"next|skip|next (?:song|track|video)|skip (?:this )?(?:song|track|one|video)?|"
+                           r"play (?:the )?next (?:song|track|one|video)")),
+    _Rule("media.previous", _r(r"previous|previous (?:song|track|video)|go back (?:a|one) (?:song|track)|"
                                r"play (?:the )?previous (?:song|track|one)|last (?:song|track)|"
                                r"play (?:the )?last (?:song|track)")),
-    _Rule("media.current", _r(r"what(?:'s| is) (?:this|the) (?:song|track)|what song is (?:this|playing)|"
+    _Rule("media.current", _r(r"what(?:'s| is) (?:this|the) (?:song|track|video)|what song is (?:this|playing)|"
                               r"what(?:'s| is) playing(?: now| right now)?|who sings this|"
-                              r"what am i listening to|what song is this")),
-    _Rule("media.play", _r(r"(?:play|put on|queue up)(?: me)? (?P<query>.+?)(?: on spotify)?"), _song),
+                              r"what am i listening to|what song is this|what video is this")),
+    _Rule("media.play", _r(r"(?:play|put on|queue up)(?: me)? (?P<query>.+?)(?P<spotify> on spotify)?"), _song),
     # ------------------------------------------------------------ volume
     _Rule("volume.set", _r(r"(?:set |turn |change )?(?:the )?(?:system )?volume (?:to |at )?(?P<level>\d{1,3}|\w+)"
                            r"(?: percent| %|%)?"), _level),
@@ -195,12 +181,11 @@ _RULES: list[_Rule] = [
                                 r"(?: (?:in|at|for) (?P<location>(?!(?:the|a)\b)[a-z][\w.'-]*(?: [a-z][\w.'-]*){0,2}?))?"
                                 r"(?: (?:today|now|tomorrow|right now|outside))?"), _weather),
     # ------------------------------------------------------------ browser & web
-    _Rule("browser.open", _r(r"(?:open|launch|start)(?: up)?(?: the| my| a)? (?:browser|web browser|internet)|"
-                             r"(?:open|launch)(?: a)? new (?:browser )?(?:tab|window)")),
-    _Rule("browser.site", _r(r"(?:open|go to|navigate to|visit|load|pull up|bring up) (?P<site>[\w .\-]+)"), _site),
-    _Rule("web.search", _r(r"(?:search|google|look up|search the web for|search online for|search google for|"
+    _Rule("browser.open", _r(r"(?:open|launch|start)(?: up)?(?: the| my| a)? (?:browser|web browser|internet)")),
+    _Rule("browser.site", _r(r"(?:open|go to|navigate to|visit|load|pull up|bring up) (?P<site>[\w .\-/]+)"), _site),
+    _Rule("web.search", _r(r"(?:search|look up|search the web for|search online for|search google for|"
                            r"search the internet for|do a search for|search for|look up online)"
-                           r" (?:for )?(?P<query>.+?)(?: on (?:the web|google|the internet|online|youtube))?"), _search),
+                           r" (?:for )?(?P<query>.+?)(?: on (?:the web|google|the internet|online))?"), _search),
     # ------------------------------------------------------------ screen & clipboard
     _Rule("screen.capture", _r(r"(?:take|grab|capture)(?: a| the)? (?:screen ?shot|screen capture|screen)|screenshot|"
                                r"screen ?shot")),
@@ -215,11 +200,6 @@ _RULES: list[_Rule] = [
     _Rule("memory.forget", _r(r"(?:forget|forget that|forget about|delete the memory) (?P<fact>.{3,})")),
 ]
 
-_TYPE_RE = re.compile(
-    r"^\s*(?:(?:please|hey|ok|okay|can you|could you)\s+)*(?:type|type out|type in|write down|dictate)"
-    r"(?:\s+(?:this|the following|that))?\s*[:,\-]?\s+(?P<text>\S.*)$",
-    re.IGNORECASE | re.DOTALL,
-)
 _APP_RE = _r(r"(?:open|launch|start|run|fire up|bring up|load|pull up)(?: up)?(?: the| my)? "
              r"(?P<name>[\w .+\-']+?)(?: app| application| program)?")
 _CLOSE_RE = _r(r"(?:close|quit|exit|kill|shut down|shut)(?: down)?(?: the| my)? "
@@ -232,12 +212,13 @@ _CALC_HINT = re.compile(r"\d|\b(?:plus|minus|times|divided|percent|squared|cubed
 
 
 class FastPath:
-    """Matches whole utterances against the grammar.
+    """Matches whole utterances (or each clause of a compound command) against the grammar.
 
     Resolvers are injected so this module stays free of OS code:
-      * ``resolve_app(name)`` → app id or None
-      * ``resolve_project(name)`` → project dict or None
+      * ``resolve_app(name)`` → app entry or None
+      * ``resolve_project(name)`` → project or None
       * ``evaluate_math(text)`` → number or None
+      * ``desktop()`` → :class:`DesktopView` (cached facts about the active window)
     """
 
     def __init__(
@@ -245,31 +226,67 @@ class FastPath:
         resolve_app: Callable[[str], Any | None] | None = None,
         resolve_project: Callable[[str], Any | None] | None = None,
         evaluate_math: Callable[[str], float | None] | None = None,
+        desktop: Callable[[], DesktopView] | None = None,
     ) -> None:
         self.resolve_app = resolve_app
         self.resolve_project = resolve_project
         self.evaluate_math = evaluate_math
+        self.desktop = desktop
+
+    def _view(self) -> DesktopView:
+        if self.desktop is None:
+            return DesktopView()
+        try:
+            return self.desktop()
+        except Exception:
+            return DesktopView()
 
     def match(self, raw_text: str) -> Intent | None:
         text = normalize(raw_text)
         if not text:
             return None
+        view = self._view()
+        single = self._match_single(raw_text, text, view)
+        if single is not None:
+            return single
+        clauses = cg.split_clauses(raw_text)
+        if len(clauses) < 2:
+            return None
+        steps: list[Intent] = []
+        for clause in clauses:
+            step = self._match_single(clause, normalize(clause), view)
+            if step is None or step.domain in ("control", "claude", "coding", "project", "memory"):
+                return None
+            steps.extend(step.slots["steps"] if step.name == "sequence" else [step])
+        return Intent("sequence", {"steps": steps}, text)
 
-        typed = _TYPE_RE.match(raw_text.strip())
-        if typed and not re.match(r"(?i)^\s*(?:type|write)\s+(?:a|an|me|some)\b", raw_text.strip()):
-            return Intent("type.text", {"text": typed.group("text").strip()}, text)
+    def _match_single(self, raw_text: str, text: str, view: DesktopView) -> Intent | None:
+        if not text:
+            return None
+        typed = cg.parse_type(raw_text, view, self.resolve_app)
+        if typed is not None:
+            return typed
+
+        for rule in _RULES_FIRST:
+            intent = self._apply(rule, text)
+            if intent is not None:
+                return intent
+
+        dialog = cg.match_dialog(text, view)
+        if dialog is not None:
+            return dialog
+        computer = cg.match_clause(text, raw_text, view, self.resolve_app)
+        if computer is not None:
+            return computer
 
         for rule in _RULES:
-            match = rule.pattern.match(text)
-            if not match:
-                continue
-            slots = {k: v for k, v in match.groupdict().items() if v is not None}
-            if rule.accept is not None:
-                accepted = rule.accept(slots)
-                if accepted is None:
-                    continue
-                slots = accepted
-            return Intent(rule.name, slots, text)
+            intent = self._apply(rule, text, raw_text)
+            if intent is not None:
+                return intent
+
+        switch = cg.match_switch(text, view, self.resolve_app)
+        if switch is not None:
+            return switch
 
         project = self._match_project(text)
         if project is not None:
@@ -294,6 +311,30 @@ class FastPath:
                 return Intent("calc.evaluate", {"expression": expression, "value": value}, text)
         return None
 
+    @staticmethod
+    def _apply(rule: _Rule, text: str, raw_text: str = "") -> Intent | None:
+        match = rule.pattern.match(text)
+        if not match:
+            return None
+        slots = {k: v for k, v in match.groupdict().items() if v is not None}
+        if rule.accept is not None:
+            accepted = rule.accept(slots)
+            if accepted is None:
+                return None
+            slots = accepted
+        intent = Intent(rule.name, slots, text)
+        if rule.name == "media.play":
+            platform = "spotify" if match.groupdict().get("spotify") else "auto"
+            intent.call = ("media.play", {"query": (raw_text or text).strip(), "platform": platform})
+        elif rule.name == "browser.site":
+            args = {"url": slots["url"], "new_tab": True}
+            if slots.get("browser"):
+                args["browser"] = slots["browser"]
+            intent.call = ("browser.open_url", args)
+        elif rule.name == "web.search":
+            intent.call = ("browser.search", {"query": slots["query"], "engine": "google"})
+        return intent
+
     def _match_project(self, text: str) -> Intent | None:
         spoken_path = _PROJECT_PATH_RE.search(text)
         if spoken_path and re.search(r"\b(?:project|work|open|code|folder|repo)\b", text):
@@ -313,4 +354,8 @@ class FastPath:
 
     def is_command(self, text: str) -> bool:
         intent = self.match(text)
-        return intent is not None and intent.name not in {"memory.remember", "type.text", "web.search"}
+        if intent is None or intent.name in {"memory.remember", "type.text", "web.search", "browser.search"}:
+            return False
+        if intent.name == "sequence":
+            return not any(step.name == "type.text" for step in intent.slots["steps"])
+        return True
