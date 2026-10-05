@@ -1,0 +1,50 @@
+# Copy to sugar.yaml to customise. Every key is optional; defaults live in
+# sugar/config/settings.py. Runtime changes made in the UI go to data/overrides.json.
+
+paths:
+  models_dir: D:\Sugar_Models          # Whisper models are stored in <models_dir>\Whisper
+
+audio:
+  input_device: null                    # name fragment, e.g. "Jabra"; null = system default
+  output_device: null
+
+stt:
+  device: auto                          # auto | cuda | cpu
+  final_model: large-v3-turbo
+  fast_model: small.en
+
+tts:
+  voice: EN-Newest
+  speed: 1.1
+
+vad:
+  endpoint_complete_ms: 380             # silence before ending a clearly finished request
+  endpoint_default_ms: 750
+  endpoint_incomplete_ms: 1700          # "I want you to…"
+
+conversation:
+  user_name: Yuki
+  engagement: wake_word                 # wake_word | always
+  engagement_timeout_s: 45
+
+llm:
+  chat_chain: [freellm, ollama, claude]
+  reasoning_chain: [claude, freellm, ollama]
+  ollama:
+    chat_model: gemma3:4b
+
+permissions:
+  auto_approve_level: 1                 # 0 read, 1 non-destructive, 2 sensitive, 3 destructive
+  trusted_tools: []                     # tools that never ask, e.g. [terminal.run]
+  allowed_roots: [D:\College]
+
+coding:
+  model: opus
+  permission_mode: auto                 # Claude Code permission mode for work tasks
+  project_roots: [D:\College, D:\College\SOMESHIT DOWNLOADS, D:\College\WEBSITES]
+
+weather:
+  location: ""                          # empty = by IP
+
+ui:
+  window: auto                          # auto | webview | edge | browser | none
