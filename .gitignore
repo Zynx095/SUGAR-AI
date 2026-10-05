@@ -164,3 +164,6 @@ Sugar_Chat_Logs.txt
 *.mp3
 *.pt
 *.bin
+# --- Sugar runtime data (logs, memory db, sessions, metrics) ---
+data/
+.ruff_cache/
