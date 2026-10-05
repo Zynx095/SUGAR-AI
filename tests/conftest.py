@@ -21,7 +21,9 @@ def run(coro):
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return load_settings(config_file=tmp_path / "missing.yaml", use_env=False, data_dir=tmp_path / "data")
+    loaded = load_settings(config_file=tmp_path / "missing.yaml", use_env=False, data_dir=tmp_path / "data")
+    loaded.computer.backend = "none"  # unit tests never touch the real desktop
+    return loaded
 
 
 @pytest.fixture

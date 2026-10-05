@@ -1,16 +1,16 @@
-"""Browser, web search, page fetching and weather.
+"""Web lookups (search results as data), page fetching and weather.
 
-Fetched web content is untrusted: it is returned to the model as data with
-an explicit marker, never as instructions, and it cannot raise permissions.
+Opening pages in the user's browser lives in ``tools/browser.py``. Fetched web
+content is untrusted: it is returned to the model as data with an explicit
+marker, never as instructions, and it cannot raise permissions.
 """
 
 from __future__ import annotations
 
-import asyncio
 import html
+import ipaddress
 import re
 import urllib.parse
-import webbrowser
 from typing import Any
 
 import httpx
@@ -54,29 +54,45 @@ async def duckduckgo(query: str, limit: int = 6) -> list[dict[str, str]]:
     return results
 
 
+async def github_search(query: str, limit: int = 8) -> list[dict[str, str]]:
+    """Repositories from GitHub's public search API (what github.com/search shows first)."""
+    async with httpx.AsyncClient(timeout=10, headers={"Accept": "application/vnd.github+json",
+                                                      "User-Agent": "sugar-assistant"}) as client:
+        response = await client.get("https://api.github.com/search/repositories",
+                                    params={"q": query, "per_page": limit})
+        response.raise_for_status()
+    return [{"title": item.get("full_name", ""), "url": item.get("html_url", ""),
+             "snippet": item.get("description") or ""} for item in response.json().get("items", [])]
+
+
+def _is_private_host(host: str) -> bool:
+    if host in {"localhost", "0.0.0.0"} or host.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
+
+
+async def fetch_text(url: str, limit: int = 12000) -> str | None:
+    """A public page's readable text, or None (private hosts are refused)."""
+    host = urllib.parse.urlparse(url).hostname or ""
+    if not re.match(r"^https?://", url) or _is_private_host(host):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
+            response = await client.get(url)
+    except httpx.HTTPError:
+        return None
+    if response.status_code >= 400:
+        return None
+    if "html" in response.headers.get("content-type", ""):
+        return html_to_text(response.text, limit)
+    return response.text[:limit]
+
+
 def register(registry: ToolRegistry, services: ToolServices) -> None:
-    working = services.working
-
-    async def open_url(args: dict[str, Any]) -> ToolResult:
-        url = args["url"].strip()
-        if not re.match(r"^https?://", url):
-            url = "https://" + url
-        await asyncio.to_thread(webbrowser.open, url)
-        working.record_action("browser", f"opened {url}", tool="browser.open_url", args={"url": url})
-        return ToolResult(True, "Opening it.", data={"url": url})
-
-    async def open_browser(args: dict[str, Any]) -> ToolResult:
-        await asyncio.to_thread(webbrowser.open, "about:blank" if args.get("blank") else "https://www.google.com")
-        working.record_action("browser", "opened the browser", tool="browser.open")
-        return ToolResult(True, "Browser's open.")
-
-    async def search(args: dict[str, Any]) -> ToolResult:
-        query = args["query"].strip()
-        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
-        await asyncio.to_thread(webbrowser.open, url)
-        working.record_action("browser", f"searched the web for {query}", tool="web.search", args={"query": query})
-        return ToolResult(True, f"Here's what I found for {query}.", data={"url": url})
-
     async def lookup(args: dict[str, Any]) -> ToolResult:
         try:
             results = await duckduckgo(args["query"], int(args.get("limit", 6)))
@@ -93,7 +109,7 @@ def register(registry: ToolRegistry, services: ToolServices) -> None:
         if not re.match(r"^https?://", url):
             return ToolResult.failure("Only http and https links can be fetched.")
         host = urllib.parse.urlparse(url).hostname or ""
-        if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith(("192.168.", "10.", "169.254.")):
+        if _is_private_host(host):
             return ToolResult.failure("I won't fetch local network addresses.")
         try:
             async with httpx.AsyncClient(timeout=15, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as client:
@@ -137,14 +153,6 @@ def register(registry: ToolRegistry, services: ToolServices) -> None:
                                                "rain_chance": rain, "units": unit})
 
     groups = frozenset({"agent", "chat"})
-    registry.register(Tool("browser.open_url", "Open a web page in the default browser.",
-                           params(["url"], url={"type": "string"}), open_url, PermissionLevel.NON_DESTRUCTIVE, 10,
-                           groups, describe=lambda a: f"open {a.get('url')}"))
-    registry.register(Tool("browser.open", "Open the web browser.", params(blank={"type": "boolean", "default": False}),
-                           open_browser, PermissionLevel.NON_DESTRUCTIVE, 10, frozenset({"agent"})))
-    registry.register(Tool("web.search", "Search the web and show the results page in the browser.",
-                           params(["query"], query={"type": "string"}), search, PermissionLevel.NON_DESTRUCTIVE, 10,
-                           groups, describe=lambda a: f"search the web for {a.get('query')}"))
     registry.register(Tool("web.lookup", "Search the web and return result titles, links and snippets to read.",
                            params(["query"], query={"type": "string"}, limit={"type": "integer", "default": 6,
                                                                               "minimum": 1, "maximum": 10}),

@@ -145,7 +145,6 @@ class PermissionSettings(BaseModel):
     trusted_tools: list[str] = Field(default_factory=list)
     allowed_roots: list[Path] = Field(default_factory=lambda: [Path("D:/College"), Path.home()])
     confirmation_timeout_s: float = 25.0
-    typing_delay_s: float = 1.5
 
 
 class CodingSettings(BaseModel):

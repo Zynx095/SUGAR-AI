@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
+
+# Who asked for the running tool call: "user" (a spoken/typed command matched by the fast path) or
+# "model". Set by the executor; tools that must treat model-written input with suspicion read it.
+current_origin: ContextVar[str] = ContextVar("current_origin", default="model")
 
 
 class PermissionLevel(IntEnum):

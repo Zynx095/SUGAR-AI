@@ -66,14 +66,14 @@ def _intent_call(intent: Intent, services_state: dict[str, Any]) -> tuple[str, d
         return simple[name], {}
     if name == "weather.current":
         return "weather.current", ({"location": slots["location"]} if slots.get("location") else {})
-    if name == "app.open":
-        return "app.open", {"name": slots["app"].name}
+    if name == "app.open":  # the spoken name, so a substitution ("Chrome isn't installed…") can be explained
+        return "app.open", {"name": slots.get("name") or slots["app"].name}
     if name == "app.close":
-        return "app.close", {"name": slots["app"].name}
+        return "app.close", {"name": slots.get("name") or slots["app"].name}
     if name == "browser.site":
         return "browser.open_url", {"url": slots["url"]}
     if name == "web.search":
-        return "web.search", {"query": slots["query"]}
+        return "browser.search", {"query": slots["query"], "engine": "google"}
     if name == "media.play":
         return "media.play", {"query": slots["query"]}
     if name == "volume.set":

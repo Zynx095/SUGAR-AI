@@ -48,9 +48,9 @@ class RouteDecision:
 # Conversation gets a deliberately small toolset: every schema costs prompt tokens and latency, and the
 # obvious commands (pause, volume, next track…) never reach a model anyway.
 CHAT_TOOLS = {
-    "weather.current", "web.lookup", "web.search", "browser.open_url", "app.open", "media.play",
-    "media.now_playing", "memory.remember", "memory.recall", "calc.evaluate", "claude.task", "claude.status",
-    "project.open",
+    "weather.current", "web.lookup", "browser.search", "app.open", "app.close", "keyboard.type", "media.play",
+    "media.pause", "media.now_playing", "memory.remember", "memory.recall", "calc.evaluate", "claude.task",
+    "claude.status", "project.open",
 }
 
 

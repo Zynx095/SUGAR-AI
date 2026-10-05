@@ -19,6 +19,7 @@ from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
+from sugar.computer import ComputerControl
 from sugar.computer.apps import AppCatalog
 from sugar.computer.spotify import SpotifyController
 from sugar.config.settings import Settings, save_override
@@ -64,15 +65,16 @@ class SugarApp:
         self.sessions = CodingSessionManager(settings.coding, self.bus, data / "coding_sessions.json")
         self.apps = AppCatalog(data / "apps.json")
         self.spotify = SpotifyController(settings)
+        self.computer = ComputerControl(settings, self.apps, self.spotify)
         self.shared_state: dict[str, Any] = {}
         self.pool = build_provider_pool(settings, self.bus)
 
         self.services = ToolServices(settings, self.bus, self.apps, self.projects, self.sessions, self.memory,
-                                     self.working, self.spotify, data, self.shared_state)
+                                     self.working, self.spotify, self.computer, data, self.shared_state)
         self.registry = build_registry(self.services)
         self.permissions = PermissionManager(settings.permissions, self.bus)
         self.executor = ToolExecutor(self.registry, self.permissions, self.bus)
-        self.fastpath = FastPath(resolve_app=self.apps.resolve, resolve_project=self.projects.resolve,
+        self.fastpath = FastPath(resolve_app=self.computer.apps.resolve_name, resolve_project=self.projects.resolve,
                                  evaluate_math=evaluate_spoken_math)
         self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()))
         self.context = ContextBuilder(settings, self.memory, self.working, lambda: self.conversation.conversation_id,
@@ -139,6 +141,13 @@ class SugarApp:
             self._component("ui", "ready", self.ui.url.split("?")[0])
         self.ui_ready.set()
         self.vocabulary_refresh()
+        if self.computer.available:
+            self.computer.start(self.bus)
+            status = self.computer.status()
+            self._component("computer", "ready", f"default browser {status['default_browser'] or 'none'}; "
+                            f"YouTube search via {status['youtube_search']}")
+        else:
+            self._component("computer", "disabled", "desktop control is off for this run")
         asyncio.create_task(self._background_discovery())
         asyncio.create_task(self._check_providers())
         await self._load_audio()
@@ -240,6 +249,7 @@ class SugarApp:
     async def shutdown(self) -> None:
         log.info("shutting down")
         await self.sessions.shutdown()
+        self.computer.stop()
         if self.pipeline is not None:
             self.pipeline.stop()
         self.speech.cancel()
@@ -271,6 +281,7 @@ class SugarApp:
             "voices": getattr(self.synth._active, "voices", []) if self.synth._active else [],
             "mic_paused": bool(self.pipeline and self.pipeline.paused),
             "pending_permission": self.permissions.pending.to_dict() if self.permissions.pending else None,
+            "desktop": self.computer.context.snapshot() if self.computer.available else None,
         }
 
     async def handle_command(self, message: dict[str, Any]) -> dict[str, Any] | None:

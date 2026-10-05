@@ -11,7 +11,7 @@ from typing import Any
 from sugar.agent.permissions import PermissionManager
 from sugar.core.events import EventBus
 from sugar.core.logging import log_event
-from sugar.tools.registry import ToolRegistry, ToolResult, ToolValidationError, validate_arguments
+from sugar.tools.registry import ToolRegistry, ToolResult, ToolValidationError, current_origin, validate_arguments
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class ToolExecutor:
         log_event("TOOL_START", tool=tool.name, origin=origin, args=_preview(clean))
         self._bus.publish("tool.start", name=tool.name, action=tool.action_text(clean),
                           level=tool.level_for(clean).label, origin=origin)
+        token = current_origin.set(origin)
         try:
             result = await asyncio.wait_for(tool.handler(clean), timeout=tool.timeout_s)
         except TimeoutError:
@@ -52,6 +53,8 @@ class ToolExecutor:
         except Exception as exc:  # a tool bug must not crash the turn
             log.exception("tool %s failed", tool.name)
             result = ToolResult.failure(f"{tool.name} failed: {exc}", repr(exc))
+        finally:
+            current_origin.reset(token)
 
         elapsed = _ms(started)
         log_event("TOOL_COMPLETE", tool=tool.name, ok=result.ok, ms=elapsed, summary=result.summary)
