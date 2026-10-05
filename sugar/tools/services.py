@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from sugar.coding.projects import ProjectRegistry
     from sugar.coding.sessions import CodingSessionManager
+    from sugar.computer.apps import AppCatalog
+    from sugar.computer.spotify import SpotifyController
     from sugar.config.settings import Settings
     from sugar.core.events import EventBus
     from sugar.intelligence.working import WorkingMemory
     from sugar.memory.store import MemoryStore
-    from sugar.tools.apps import AppCatalog
-    from sugar.tools.media import SpotifyController
 
 
 @dataclass

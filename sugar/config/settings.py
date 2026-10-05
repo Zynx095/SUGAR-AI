@@ -170,6 +170,23 @@ class CodingSettings(BaseModel):
     progress_interval_s: float = 30.0
 
 
+class ComputerSettings(BaseModel):
+    backend: Literal["auto", "none"] = "auto"  # "none" disables desktop control (tests, headless runs)
+    typing_mode: Literal["auto", "realtime", "paste"] = "auto"  # auto: real-time, paste for long text/code
+    typing_interval_ms: float = 6.0  # pause between characters when typing in real time
+    key_gap_ms: float = 4.0  # pause between individual key events (apps must see each modifier state)
+    paste_threshold_chars: int = 300  # auto mode pastes text longer than this
+    restore_clipboard: bool = True  # put the user's clipboard back after a paste
+    verify_typing: bool = True  # read the text back through UI Automation
+    launch_timeout_s: float = 12.0
+    close_timeout_s: float = 4.0
+    browser: str = ""  # brave | chrome | edge | firefox …; empty = the Windows default browser
+    music_platform: Literal["auto", "spotify", "youtube"] = "auto"  # auto: Spotify when configured
+    pause_other_media: bool = True  # starting YouTube pauses Spotify (and vice versa)
+    youtube_api_key_env: str = "YOUTUBE_API_KEY"  # optional: YouTube Data API v3 for search
+    youtube_region: str = ""  # e.g. "IN"; empty = YouTube's default for this connection
+
+
 class SpotifySettings(BaseModel):
     enabled: bool = True
     client_id_env: str = "SPOTIFY_CLIENT_ID"
@@ -207,6 +224,7 @@ class Settings(BaseModel):
     conversation: ConversationSettings = ConversationSettings()
     permissions: PermissionSettings = PermissionSettings()
     coding: CodingSettings = CodingSettings()
+    computer: ComputerSettings = ComputerSettings()
     spotify: SpotifySettings = SpotifySettings()
     weather: WeatherSettings = WeatherSettings()
     ui: UISettings = UISettings()

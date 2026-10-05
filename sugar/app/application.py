@@ -19,6 +19,8 @@ from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
+from sugar.computer.apps import AppCatalog
+from sugar.computer.spotify import SpotifyController
 from sugar.config.settings import Settings, save_override
 from sugar.core.events import EventBus
 from sugar.core.logging import log_event
@@ -33,9 +35,7 @@ from sugar.intelligence.working import WorkingMemory
 from sugar.memory.store import MemoryStore
 from sugar.providers import build_provider_pool
 from sugar.tools import build_registry
-from sugar.tools.apps import AppCatalog
 from sugar.tools.calculator import evaluate_spoken_math
-from sugar.tools.media import SpotifyController
 from sugar.tools.services import ToolServices
 
 log = logging.getLogger(__name__)
