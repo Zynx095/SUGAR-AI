@@ -43,6 +43,14 @@ coding:
   permission_mode: auto                 # Claude Code permission mode for work tasks
   project_roots: [D:\College, D:\College\SOMESHIT DOWNLOADS, D:\College\WEBSITES]
 
+computer:
+  typing_mode: auto                     # auto | realtime | paste (auto pastes long text and code)
+  typing_interval_ms: 6                 # pause between characters when typing in real time
+  browser: ""                           # brave | chrome | edge | firefox; empty = Windows default
+  music_platform: auto                  # auto (Spotify when set up) | spotify | youtube
+  pause_other_media: true               # starting YouTube pauses Spotify and vice versa
+  youtube_region: ""                    # e.g. IN
+
 weather:
   location: ""                          # empty = by IP
 
