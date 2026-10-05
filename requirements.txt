@@ -32,12 +32,18 @@ scipy>=1.11
 # Language models
 anthropic>=1.0          # only used when ANTHROPIC_API_KEY is set
 
-# Desktop control and integrations
+# Computer control (Win32 via ctypes; UI Automation via comtypes; media sessions via WinRT)
+comtypes>=1.4
+psutil>=5.9
+winrt-runtime>=3.0
+winrt-Windows.Foundation>=3.0
+winrt-Windows.Foundation.Collections>=3.0
+winrt-Windows.Media.Control>=3.0
+pillow>=10.0            # screenshots
+pycaw>=20240210         # system volume
+
+# Integrations
 spotipy>=2.24
-pyautogui>=0.9
-pyperclip>=1.8
-pillow>=10.0
-pycaw>=20240210
 
 # UI
 websockets>=13
