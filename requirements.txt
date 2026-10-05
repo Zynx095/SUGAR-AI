@@ -1,27 +1,48 @@
-# MISC
-pytest
-pydantic
+# Sugar — runtime dependencies (Python 3.12, Windows 10/11)
+#
+# GPU (recommended): install the CUDA 12.8 build of PyTorch FIRST so MeloTTS and
+# Whisper run on RTX 50-series (Blackwell) cards:
+#   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+# CPU-only machines can use the default torch wheel instead.
 
-# MLX & Whisper
-mlx>=0.11
-mlx-lm
-numba
-numpy
-torch
-tqdm
-more-itertools
-tiktoken==0.3.3
-huggingface_hub
-scipy
+# Core
+numpy>=2.0
+pydantic>=2.7
+PyYAML>=6.0
+python-dotenv>=1.0
+httpx>=0.27
 
-# MeloTTS
-g2p_en
-cached_path
+# Audio in / out
+sounddevice>=0.5
+soundfile>=0.12
+soxr>=0.3
 
-# Main
-pyaudio
-playsound
-webrtcvad
-sounddevice
-librosa
-torchaudio
+# Speech recognition (bundles the Silero VAD model)
+faster-whisper>=1.2
+onnxruntime>=1.18
+
+# Text to speech (vendored MeloTTS in ./melo)
+torch>=2.7
+transformers>=4.40
+huggingface_hub>=0.23
+g2p_en>=2.1
+inflect>=7.0
+scipy>=1.11
+
+# Language models
+anthropic>=1.0          # only used when ANTHROPIC_API_KEY is set
+
+# Desktop control and integrations
+spotipy>=2.24
+pyautogui>=0.9
+pyperclip>=1.8
+pillow>=10.0
+pycaw>=20240210
+
+# UI
+websockets>=13
+pywebview>=5.0          # optional: native window (falls back to Edge app mode)
+
+# Development
+pytest>=8.0
+ruff>=0.5
