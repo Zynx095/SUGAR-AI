@@ -96,6 +96,10 @@ button, input { font: inherit; color: inherit; }
 .link-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--smoke); }
 .link[data-state="online"] .link-dot { background: var(--gold); }
 .link[data-state="degraded"] .link-dot { background: var(--signal); }
+.link[data-state="partial"] .link-dot { background: var(--ash); }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 2px; }
+.field select { width: 100%; background: var(--graphite-up); border: 1px solid var(--seam); color: var(--bone);
+  border-radius: var(--radius-small); padding: 6px 8px; font-size: var(--t-s); }
 .icon-btn {
   display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: var(--radius-small);
   background: transparent; color: var(--ash); cursor: pointer;

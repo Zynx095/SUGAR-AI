@@ -7,7 +7,7 @@
 
 export const STATES = [
   "idle", "listening", "processing", "thinking", "coding", "executing",
-  "speaking", "interrupted", "error", "offline", "muted",
+  "speaking", "interrupted", "error", "offline", "muted", "creative", "research",
 ];
 
 // Visual targets for the particle entity. The renderer eases toward them.
@@ -29,6 +29,8 @@ export const PRESETS = {
   interrupted: { speed: 0.06, core: 0.45, turbulence: 0.05, inward: 0.0,  structure: 0.3,  rings: 0.3,  field: 0.3,  streams: 0.1,  pulse: 0,   warn: 0, dim: 0.8,  flicker: 0.0,  react: null },
   error:       { speed: 0.3,  core: 0.9,  turbulence: 0.4,  inward: 0.1,  structure: 0.4,  rings: 0.6,  field: 0.55, streams: 0.2,  pulse: 1.4, warn: 1, dim: 1.0,  flicker: 0.2,  react: null },
   offline:     { speed: 0.04, core: 0.28, turbulence: 0.08, inward: 0.0,  structure: 0.3,  rings: 0.18, field: 0.2,  streams: 0.0,  pulse: 0,   warn: 0, dim: 0.35, flicker: 0.0,  react: null },
+  creative:    { speed: 0.5,  core: 1.0,  turbulence: 1.1,  inward: 0.0,  structure: 0.15, rings: 0.75, field: 0.95, streams: 0.7,  pulse: 3.0, warn: 0, dim: 1.0,  flicker: 0.25, react: null },
+  research:    { speed: 0.8,  core: 0.95, turbulence: 0.2,  inward: 0.3,  structure: 0.9,  rings: 0.95, field: 0.6,  streams: 0.85, pulse: 2.0, warn: 0, dim: 1.0,  flicker: 0.05, react: null },
   muted:       { speed: 0.12, core: 0.55, turbulence: 0.15, inward: 0.0,  structure: 0.35, rings: 0.35, field: 0.35, streams: 0.15, pulse: 0,   warn: 0, dim: 0.6,  flicker: 0.0,  react: null },
 };
 
@@ -44,6 +46,8 @@ export const LABELS = {
   error: "Fault detected",
   offline: "Offline. Reconnecting",
   muted: "Microphone off",
+  creative: "Composing",
+  research: "Researching",
 };
 
 const ERROR_HOLD_MS = 2600;
@@ -62,6 +66,7 @@ export class StateTracker {
     this.errorUntil = 0;
     this.errorText = "";
     this.interruptedUntil = 0;
+    this.mode = null; // creative | research — from the category of the current turn
   }
 
   setConnected(connected) {
@@ -88,6 +93,10 @@ export class StateTracker {
       case "turn.started":
         this.turnId = data.turn_id;
         this.phase = "processing";
+        this.mode = null;
+        break;
+      case "route.selected":
+        this.mode = data.mode || null;
         break;
       case "llm.start":
       case "llm.first_token":
@@ -95,7 +104,10 @@ export class StateTracker {
         break;
       case "assistant.message":
       case "turn.cancelled":
-        if (!data.turn_id || data.turn_id === this.turnId) this.phase = null;
+        if (!data.turn_id || data.turn_id === this.turnId) {
+          this.phase = null;
+          this.mode = null;
+        }
         break;
       case "coding.session":
         if (data.status === "running") this.running.set(data.project_path, data.project_name);
@@ -126,6 +138,7 @@ export class StateTracker {
       backend: this.backend,
       phase: this.phase,
       codingProject: this.codingProject,
+      mode: this.mode,
       errorActive: now < this.errorUntil,
       interruptedActive: now < this.interruptedUntil,
     });
@@ -137,7 +150,7 @@ export class StateTracker {
 }
 
 /** Precedence: connection → fault → interruption → foreground activity → background Claude Code → idle. */
-export function deriveState({ connected, backend, phase, codingProject, errorActive, interruptedActive }) {
+export function deriveState({ connected, backend, phase, codingProject, errorActive, interruptedActive, mode = null }) {
   if (!connected) return "offline";
   if (backend === "error" || errorActive) return "error";
   if (backend === "interrupted" || interruptedActive) return "interrupted";
@@ -147,8 +160,11 @@ export function deriveState({ connected, backend, phase, codingProject, errorAct
   // Transcribing is still part of hearing: most speech near the mic is not addressed to SID. "Analysing
   // request" appears only once a turn has actually started.
   if (backend === "transcribing") return phase ? "processing" : "listening";
-  if (backend === "tool_execution") return "executing";
-  if (backend === "thinking") return phase === "thinking" ? "thinking" : "processing";
+  if (backend === "tool_execution") return mode === "research" ? "research" : "executing";
+  if (backend === "thinking") {
+    if (phase !== "thinking") return "processing";
+    return mode === "creative" || mode === "research" ? mode : "thinking";
+  }
   if (codingProject) return "coding";
   return "idle";
 }

@@ -405,6 +405,14 @@ class SIDApp:
             deleted = self.memory.delete(int(message.get("id", -1)))
             self.bus.publish("memory.changed", action="delete", id=message.get("id"))
             return {"ok": deleted}
+        if cmd == "voice.set":
+            result = await self.executor.execute("voice.set", {"voice": str(message.get("voice", "sid"))}, origin="user")
+            return {"ok": result.ok, "summary": result.summary}
+        if cmd == "personality.set":
+            result = await self.executor.execute("personality.set",
+                                                 {"personality": str(message.get("personality", "sid"))},
+                                                 origin="user")
+            return {"ok": result.ok, "summary": result.summary}
         if cmd == "project.clear":
             self.working.clear_project()
             self.bus.publish("project.active", name=None, path=None, stack=[])

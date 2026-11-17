@@ -257,6 +257,21 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
                             "document.getElementById('composer').requestSubmit()")
             await asyncio.sleep(0.3)
 
+            # voice identity drives the whole palette: entity colours tween, UI accents follow
+            bus.publish("voice.changed", id="female", name="SID (female)", palette=["#e8114f", "#ff6fa3", "#9e0c5c",
+                                                                                     "#ffb03a"], reason="voice.set")
+            results["female_mid"] = await page.until(
+                "window.__sid.entity().paletteProgress < 1 && window.__sid.entity().paletteProgress + 0.001")
+            results["female"] = await page.until(
+                "window.__sid.entity().paletteProgress >= 1 && window.__sid.entity().palette")
+            results["female_accent"] = await page.eval("window.__sid.accent()")
+            await page.screenshot("06-female")
+            bus.publish("voice.changed", id="sid", name="SID", palette=["#ffab3d", "#f6cf7a", "#ff6a12", "#ff4524"],
+                        reason="voice.set")
+            results["sid"] = await page.until(
+                "window.__sid.entity().paletteProgress >= 1 && window.__sid.entity().palette[0] === '#ffab3d' "
+                "&& window.__sid.entity().palette")
+
             # the core going away shows offline
             await server.stop()
             results["offline"] = await page.until("window.__sid.state().state === 'offline' && window.__sid.status()")
@@ -291,4 +306,7 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
     assert results["hidden"]["running"] is False
     assert results["hidden"]["frames_after"] - results["hidden"]["frames_before"] <= 1
     assert results["offline"] == "Offline. Reconnecting"
+    assert results["female"][0] == "#e8114f" and results["female_accent"] == "#e8114f"
+    assert results["female_mid"] < 1  # a transition, not a jump
+    assert results["sid"][0] == "#ffab3d"
     assert {"cmd": "text", "text": "What is a closure?"}.items() <= next(c for c in commands if c["cmd"] == "text").items()

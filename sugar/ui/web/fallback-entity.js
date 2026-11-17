@@ -23,6 +23,7 @@ export class FallbackEntity {
     this.phase = 0;
     this.time = 0;
     this.layout = { x: 0, y: 0, zone: 0 };
+    this.colours = ["#ffab3d", "#f6cf7a", "#ff6a12", "#ff4524"];
     this.wave = 0;
     this.particles = Array.from({ length: 420 }, (_, i) => ({
       ring: i % 4, angle: Math.random() * TAU, jitter: (Math.random() - 0.5) * 0.08, size: 0.6 + Math.random() * 1.6,
@@ -47,6 +48,10 @@ export class FallbackEntity {
 
   pulse() {
     if (!this.reducedMotion) this.wave = 0.01;
+  }
+
+  setPalette(colours) {
+    if (colours && colours.length >= 3) this.colours = [...colours.slice(0, 3), colours[3] || "#ff9a3c"];
   }
 
   setLayout({ x = 0, y = 0, zone = 0 } = {}) {
@@ -90,7 +95,9 @@ export class FallbackEntity {
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = "lighter";
-    const warm = (a) => (p.warn > 0.5 ? `rgba(255, 154, 60, ${a})` : `rgba(212, 10, 42, ${a})`);
+    const [body, , , warning] = this.colours;
+    const rgba = (hex, a) => `rgba(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)}, ${a})`;
+    const warm = (a) => rgba(p.warn > 0.5 ? warning : body, a);
 
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 5);
     glow.addColorStop(0, warm(0.35 * p.dim * (0.6 + p.core * 0.5 + this.level)));

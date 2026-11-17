@@ -88,6 +88,9 @@ export class Entity {
     this.layout = { x: 0, y: 0, zone: 0 }; // where the entity sits inside the full-stage canvas (CSS px)
     this.contextLost = false;
     this.backend = "webgl";
+    // palette tween: [body, highlight, depth, warning] — driven by the active voice identity
+    this.palette = { from: null, to: null, t: 1, duration: 0.8 };
+    this._tmp = [new THREE.Color(), new THREE.Color(), new THREE.Color(), new THREE.Color()];
     this._build();
     this.loop = new RenderLoop({ onFrame: (dt) => this._frame(dt) });
     this._onPointer = this._onPointer.bind(this);
@@ -157,9 +160,31 @@ export class Entity {
     this.uniforms.uViewport.value = height * ratio;
   }
 
+  /** Move the whole entity to a new palette ([body, highlight, depth, warning] hex) over ``ms``. */
+  setPalette(colours, ms = 800) {
+    if (!colours || colours.length < 3) return;
+    const u = this.uniforms;
+    const current = [u.uAmber.value, u.uGold.value, u.uEmber.value, u.uWarnColor.value].map((c) => c.clone());
+    const target = colours.slice(0, 4).map((hex) => new THREE.Color(hex));
+    while (target.length < 4) target.push(current[target.length].clone());
+    this.palette = { from: current, to: target, t: ms > 0 ? 0 : 1, duration: Math.max(0.001, ms / 1000) };
+    if (ms <= 0) this._applyPalette(1);
+  }
+
+  _applyPalette(k) {
+    const { from, to } = this.palette;
+    if (!from || !to) return;
+    const u = this.uniforms;
+    const slots = [u.uAmber.value, u.uGold.value, u.uEmber.value, u.uWarnColor.value];
+    for (let i = 0; i < 4; i++) slots[i].copy(from[i]).lerp(to[i], k);
+    for (const ring of this.rings) ring.line.material.color.copy(slots[0]);
+  }
+
   info() {
     return { backend: this.backend, state: this.state, running: this.loop.running, frames: this.loop.frames,
       fps: this.loop.fps, contextLost: this.contextLost, points: this.pointCount,
+      palette: [this.uniforms.uAmber.value, this.uniforms.uGold.value, this.uniforms.uEmber.value]
+        .map((c) => `#${c.getHexString()}`), paletteProgress: this.palette.t,
       size: [this.renderer.domElement.width, this.renderer.domElement.height] };
   }
 
@@ -327,7 +352,7 @@ export class Entity {
       // the faint guide line of the orbit
       const curve = new THREE.EllipseCurve(0, 0, spec.rx, spec.ry, 0, TAU);
       const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(curve.getPoints(180)),
-        new THREE.LineBasicMaterial({ color: AMBER, transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending,
+        new THREE.LineBasicMaterial({ color: AMBER.clone(), transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending,
           depthWrite: false }));
       pivot.add(line);
       this.group.add(pivot);
@@ -477,6 +502,11 @@ export class Entity {
       if (this.wave.r > 6) this.wave.amp = 0;
     }
 
+    if (this.palette.t < 1) {
+      this.palette.t = Math.min(1, this.palette.t + dt / this.palette.duration);
+      const k = this.palette.t * this.palette.t * (3 - 2 * this.palette.t); // smoothstep easing
+      this._applyPalette(k);
+    }
     const u = this.uniforms;
     u.uTime.value = this.time;
     u.uPhase.value = this.phase;

@@ -122,17 +122,23 @@ function setLink() {
     $("linkText").textContent = "Disconnected";
     return;
   }
-  const claude = ui.components.claude_code;
   const degraded = Object.values(ui.components).some((c) => c.status === "error");
-  link.dataset.state = degraded ? "degraded" : "online";
-  $("linkText").textContent = claude && claude.status === "ready" ? "Claude Code linked"
-    : claude && claude.status !== "loading" ? "Claude Code unavailable" : "Connected";
+  const models = { online: "Online", degraded: "Degraded", local_fallback: "Local model only", offline: "Models offline" };
+  const connectivity = ui.connectivity;
+  link.dataset.state = degraded || connectivity === "offline" ? "degraded"
+    : connectivity === "local_fallback" || connectivity === "degraded" ? "partial" : "online";
+  $("linkText").textContent = connectivity ? models[connectivity] || "Connected" : "Connected";
+  link.title = `Models: ${connectivity || "checking"}. Claude Code: ${(ui.components.claude_code || {}).status || "checking"}.`;
 }
 
 // ------------------------------------------------------------------ snapshot
 
 function applySnapshot(data) {
   tracker.applySnapshot(data);
+  ui.voiceIdentities = data.voice_identities || [];
+  ui.personalities = data.personalities || [];
+  ui.connectivity = data.connectivity || null;
+  applyVoice(data.voice, false);
   ui.components = data.components || {};
   ui.providers = data.providers || {};
   ui.settings = data.settings || {};
@@ -243,6 +249,17 @@ function handleEvent(event) {
       break;
     case "system.ready":
       finishBoot();
+      break;
+    case "voice.changed":
+      applyVoice(data, true);
+      break;
+    case "personality.changed":
+      if (ui.voice) ui.voice.personality = data.personality;
+      renderVoices();
+      break;
+    case "providers.status":
+      ui.connectivity = data.connectivity;
+      setLink();
       break;
     case "providers.health":
       ui.providers = data.providers;
@@ -811,7 +828,47 @@ function renderSettings() {
   $("patience").value = s.vad.endpoint_default_ms;
   $("patienceValue").textContent = `${s.vad.endpoint_default_ms} ms`;
   document.querySelectorAll('input[name="engagement"]').forEach((r) => (r.checked = r.value === s.conversation.engagement));
-  document.querySelectorAll('input[name="voiceProfile"]').forEach((r) => (r.checked = r.value === s.tts.voice_profile));
+  renderVoices();
+}
+
+// The active voice identity is the single source of the entity's palette and the UI accents.
+function applyVoice(voice, animate = true) {
+  if (!voice) return;
+  ui.voice = voice;
+  if (entity && entity.setPalette) entity.setPalette(voice.palette, animate ? 800 : 0);
+  const root = document.documentElement.style;
+  const [body, highlight, , warning] = voice.palette;
+  root.setProperty("--amber", body);
+  root.setProperty("--gold", highlight);
+  if (warning) root.setProperty("--signal", warning);
+  renderVoices();
+}
+
+function renderVoices() {
+  const list = $("voiceList");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const v of ui.voiceIdentities || []) {
+    const label = document.createElement("label");
+    label.className = "radio";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "voiceIdentity";
+    input.value = v.id;
+    input.checked = ui.voice ? ui.voice.id === v.id : false;
+    input.addEventListener("change", () => send("voice.set", { voice: v.id }));
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = v.palette[0];
+    label.append(input, swatch, document.createTextNode(` ${v.name}`));
+    list.appendChild(label);
+  }
+  const select = $("personality");
+  if (select && ui.personalities && !select.options.length) {
+    for (const p of ui.personalities) select.add(new Option(p.name, p.id));
+    select.addEventListener("change", () => send("personality.set", { personality: select.value }));
+  }
+  if (select && ui.voice) select.value = ui.voice.personality || "sid";
 }
 
 function bindSetting(id, key, format) {
@@ -824,8 +881,6 @@ bindSetting("sensitivity", "vad.threshold", (v) => Number(v).toFixed(2));
 bindSetting("patience", "vad.endpoint_default_ms", (v) => `${v} ms`);
 document.querySelectorAll('input[name="engagement"]').forEach((r) =>
   r.addEventListener("change", () => send("setting", { key: "conversation.engagement", value: r.value })));
-document.querySelectorAll('input[name="voiceProfile"]').forEach((r) =>
-  r.addEventListener("change", () => send("setting", { key: "tts.voice_profile", value: r.value })));
 $("newConversation").addEventListener("click", () => {
   send("new_conversation");
   document.querySelectorAll("#captions .turn").forEach((t) => t.remove());
@@ -909,11 +964,14 @@ window.__sid = {
   bench: () => ({ mode: app.dataset.bench, project: $("projectName").textContent, ...buildWorkbench({
     activeProject: ui.project, sessions: [...ui.sessions.values()], claude: ui.components.claude_code }) }),
   status: () => $("status").textContent,
+  voice: () => ui.voice || null,
+  accent: () => getComputedStyle(document.documentElement).getPropertyValue("--amber").trim(),
 };
 
 new ResizeObserver(() => alignEntity()).observe(document.querySelector(".presence"));
 createEntity().then((created) => {
   entity = created;
+  if (ui.voice && entity.setPalette) entity.setPalette(ui.voice.palette, 0);
   alignEntity();
   renderEntityState();
 });
