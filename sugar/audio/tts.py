@@ -57,8 +57,11 @@ def _resample(audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarr
 class MeloEngine:
     name = "melo"
 
-    def __init__(self, settings: TTSSettings) -> None:
+    def __init__(self, settings: TTSSettings, models_dir: Path | None = None) -> None:
         self._settings = settings
+        self._models_dir = models_dir
+        self._converter = None  # OpenVoice tone colour converter for cloned profiles
+        self._converter_failed = False
         self._tts = None
         self._speaker_id = 0
         self._lock = threading.Lock()
@@ -97,6 +100,8 @@ class MeloEngine:
         self._speaker_id = speakers.get(self._settings.voice, next(iter(speakers.values())))
         self.sample_rate = int(self._tts.hps.data.sampling_rate)
         self.voices = list(speakers.keys())
+        if get_profile(self._settings.voice_profile).clone:
+            self._clone_converter()
         self.synthesize("Okay.")  # first CUDA call compiles kernels (~2 s)
         log.info("MeloTTS ready on %s in %.1fs (voice %s)", self.device, time.perf_counter() - started,
                  self._settings.voice)
@@ -137,7 +142,36 @@ class MeloEngine:
                 length_scale=length_scale_factor(profile) / max(0.5, s.speed * profile.pace),
             )[0][0, 0]
             raw = audio.float().cpu().numpy().astype(np.float32)
+        if profile.clone:
+            converter = self._clone_converter()
+            if converter is not None:
+                try:
+                    return converter.convert(raw, self.sample_rate, air_db=profile.clone_air_db)
+                except Exception:
+                    log.exception("voice conversion failed; using the DSP approximation for this sentence")
+            profile = get_profile("sid_dsp")  # same voice, approximated without the converter
         return apply_profile(raw, self.sample_rate, profile)
+
+    def _clone_converter(self):
+        """Load the OpenVoice converter once (models on D:, see voice_clone.py); None if unavailable."""
+        if self._converter is not None or self._converter_failed:
+            return self._converter
+        from sugar.audio.voice_clone import ToneConverter
+        from sugar.config.settings import ROOT_DIR
+
+        models = self._models_dir or Path(r"D:\Sugar_Models")
+        reference = Path(self._settings.voice_reference)
+        if not reference.is_absolute():
+            reference = ROOT_DIR / reference
+        converter = ToneConverter(models / "OpenVoiceV2", reference, tau=self._settings.clone_tau,
+                                  device=self._settings.device)
+        try:
+            converter.load()
+            self._converter = converter
+        except Exception as exc:
+            self._converter_failed = True
+            log.warning("voice cloning unavailable (%s); using the DSP approximation", exc)
+        return self._converter
 
 
 class SapiEngine:
@@ -272,10 +306,10 @@ class Synthesizer:
                 log.debug("prewarm failed for %r", phrase, exc_info=True)
 
 
-def build_synthesizer(settings: TTSSettings, temp_dir: Path) -> Synthesizer:
+def build_synthesizer(settings: TTSSettings, temp_dir: Path, models_dir: Path | None = None) -> Synthesizer:
     engines: list[TTSEngine] = []
     if settings.engine == "melo":
-        engines.append(MeloEngine(settings))
+        engines.append(MeloEngine(settings, models_dir))
     if settings.engine == "sapi" or settings.fallback:
         engines.append(SapiEngine(settings, temp_dir))
     return Synthesizer(engines)

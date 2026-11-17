@@ -32,6 +32,13 @@ def fundamental(audio: np.ndarray, fmin: float = 60.0, fmax: float = 400.0) -> f
 
 def test_default_voice_is_sid():
     assert TTSSettings().voice_profile == "sid" and get_profile("sid") is PROFILES["sid"]
+    assert TTSSettings().voice_reference.endswith("ULTRON_SID.mp3")
+
+
+def test_sid_is_cloned_from_the_reference_and_only_pace_and_treble_are_fitted():
+    sid = PROFILES["sid"]
+    assert sid.clone and sid.pace != 1.0
+    assert sid.register == 1.0 and not sid.pitch_steps and not sid.eq and not sid.compression
     assert get_profile("unknown") is PROFILES["natural"]
 
 
@@ -40,14 +47,14 @@ def test_natural_profile_is_untouched():
     assert np.array_equal(apply_profile(audio, RATE, PROFILES["natural"]), audio)
 
 
-def test_sid_profile_lowers_the_voice_into_a_baritone_register():
-    shaped = apply_profile(voiced(200.0), RATE, PROFILES["sid"])
+def test_dsp_fallback_lowers_the_voice_to_the_reference_pitch():
+    shaped = apply_profile(voiced(200.0), RATE, PROFILES["sid_dsp"])
     f0 = fundamental(shaped)
     assert 75 <= f0 <= 92, f0  # MeloTTS EN-Newest speaks around 200 Hz; ULTRON_SID.mp3 sits at 83 Hz
 
 
 def test_register_shift_is_compensated_by_faster_synthesis():
-    profile = PROFILES["sid"]
+    profile = PROFILES["sid_dsp"]
     audio = voiced(seconds=2.0)
     shaped = apply_profile(audio, RATE, profile)
     # MeloTTS is asked for length_scale × register, so the stretched result is back to normal pace.
@@ -66,7 +73,7 @@ def test_empty_audio_passes_through():
 
 
 def test_processing_is_cheap_enough_for_streaming():
-    profile = PROFILES["sid"]
+    profile = PROFILES["sid_dsp"]
     audio = voiced(seconds=5.0)
     apply_profile(audio[:RATE], RATE, profile)  # first call pays numba/FFT warm-up
     started = time.perf_counter()
@@ -74,10 +81,10 @@ def test_processing_is_cheap_enough_for_streaming():
     assert time.perf_counter() - started < 0.6  # ~0.2 s measured for a 5 s sentence
 
 
-def test_sid_is_the_profile_fitted_to_the_reference_recording():
+def test_dsp_fallback_is_fitted_to_the_reference_recording():
     from sugar.audio.voice_profile import MATCH_FILE
 
-    sid = PROFILES["sid"]
+    sid = PROFILES["sid_dsp"]
     assert MATCH_FILE.exists() and sid.pitch_method == "psola" and len(sid.eq) > 50
 
 

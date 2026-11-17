@@ -194,3 +194,34 @@ def test_melo_engine_synthesizes_quickly():
     assert audio.size > engine.sample_rate * 0.5
     assert min(synth) < (0.5 if engine.device == "cuda" else 3.0), synth
     assert min(dsp) < 0.3, dsp
+
+
+@pytest.mark.skipif(not MODEL_TESTS, reason="set SUGAR_MODEL_TESTS=1 to run model tests")
+def test_sid_voice_is_cloned_from_the_reference():
+    """MeloTTS + OpenVoice conversion: the reference speaker's pitch and timbre, and Whisper still understands it."""
+    import librosa
+    import torch
+
+    from sugar.audio.tts import MeloEngine
+    from sugar.config.settings import ROOT_DIR
+
+    reference = ROOT_DIR / TTSSettings().voice_reference
+    if not reference.exists():
+        pytest.skip("reference recording not present")
+    engine = MeloEngine(TTSSettings(voice_profile="sid"))
+    engine.load()
+    converter = engine._converter
+    assert converter is not None, "OpenVoice converter files missing from D:/Sugar_Models/OpenVoiceV2"
+    audio = engine.synthesize("Hello, I am Sid, your personal AI assistant.")
+
+    def embedding(y, rate):
+        resampled = librosa.resample(y, orig_sr=rate, target_sr=converter.sample_rate)
+        with torch.no_grad():
+            return converter._model.ref_enc(converter._spectrogram(resampled).transpose(1, 2)).squeeze().cpu().numpy()
+
+    ref_audio, _ = librosa.load(str(reference), sr=engine.sample_rate)
+    a, b = embedding(audio, engine.sample_rate), embedding(ref_audio, engine.sample_rate)
+    assert float(a @ b / np.linalg.norm(a) / np.linalg.norm(b)) > 0.8
+    f0, _, _ = librosa.pyin(librosa.resample(audio, orig_sr=engine.sample_rate, target_sr=16000), fmin=45, fmax=400,
+                            sr=16000)
+    assert 70 <= float(np.nanmedian(f0)) <= 95

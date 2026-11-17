@@ -36,7 +36,8 @@ def run_webview(url: str, on_closed: Callable[[], None], title: str = "SID") -> 
     window = webview.create_window(title, url, width=1280, height=860, min_size=(860, 600),
                                    background_color="#000000", text_select=True)
     window.events.closed += lambda: on_closed()
-    webview.start(private_mode=False, storage_path=str(Path(os.environ.get("LOCALAPPDATA", ".")) / "SID" / "webview"))
+    # Window profile on the project drive (D:), not %LOCALAPPDATA% on C:.
+    webview.start(private_mode=False, storage_path=str(Path(__file__).resolve().parents[2] / "data" / "webview"))
 
 
 def _edge_path() -> str | None:

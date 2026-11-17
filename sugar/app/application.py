@@ -94,7 +94,7 @@ class SIDApp:
         from sugar.audio.speech import SpeechOutput
         from sugar.audio.tts import build_synthesizer
 
-        self.synth = build_synthesizer(settings.tts, data / "tts_tmp")
+        self.synth = build_synthesizer(settings.tts, data / "tts_tmp", settings.paths.models_dir)
         self.player = AudioPlayer(device=settings.audio.output_device)
         self.player.volume = settings.tts.volume
         self.speech = SpeechOutput(self.synth, self.player, self.bus)

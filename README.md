@@ -75,11 +75,12 @@ mic → Silero VAD → echo guard → endpointer ─┐
 - Wake phrase **"Hey SID"**; a bare "SID" at the start ("SID, run the tests") or set off at the end
   ("run the tests, SID.") also works. Whisper's common mishearings ("Hey side") count only after "hey",
   so ordinary sentences don't wake it.
-- An original synthetic voice built on MeloTTS (`sugar/audio/voice_profile.py`): a lowered register with
-  formant shift, a formant-preserving pitch step, a faint metallic resonance, a shallow electronic grain,
-  tone shaping and compression. Measured over 12 sentences: median pitch 203 Hz → 127 Hz, Whisper word
-  error rate 1.0% (raw MeloTTS 1.6%), about 40 ms of processing per sentence. Profiles: `sid`, `sid_clean`,
-  `natural` (Settings → Voice).
+- The voice is cloned from `data/voice_samples/ULTRON_SID.mp3`: MeloTTS speaks, and OpenVoice V2's tone
+  colour converter (vendored in `openvoice/`, MIT; model in `D:\Sugar_Models\OpenVoiceV2`) re-voices it
+  as the reference speaker. Only the pace and the treble above 9.5 kHz are fitted (`tools/fit_clone.py`).
+  Measured: speaker similarity 0.89 to the reference (raw MeloTTS 0.19), median pitch 81 Hz (reference
+  83 Hz), every band 60 Hz–16 kHz within 2.7 dB. Without the model files SID falls back to a DSP
+  approximation (`sid_dsp`, `tools/fit_voice.py`).
 - Barge-in is unchanged: talk over SID and it stops within one audio block.
 
 ### Interface

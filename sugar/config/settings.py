@@ -75,7 +75,9 @@ class TTSSettings(BaseModel):
     engine: Literal["melo", "sapi", "none"] = "melo"
     device: Literal["auto", "cuda", "cpu"] = "auto"
     voice: str = "EN-Newest"
-    voice_profile: str = "sid"  # sid | sid_clean | natural (see sugar/audio/voice_profile.py)
+    voice_profile: str = "sid"  # sid (cloned) | sid_dsp | sid_v2 | sid_clean | natural
+    voice_reference: str = "data/voice_samples/ULTRON_SID.mp3"  # the voice "sid" is cloned from
+    clone_tau: float = 0.3  # OpenVoice conversion temperature
     speed: float = 0.97  # measured pacing
     sdp_ratio: float = 0.5
     noise_scale: float = 0.6

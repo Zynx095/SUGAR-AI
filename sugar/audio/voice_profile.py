@@ -48,6 +48,8 @@ class VoiceProfile:
     noise_scale_w: float | None = None
     pace: float = 1.0  # multiplies tts.speed
     eq: tuple[tuple[float, float], ...] = ()  # (Hz, dB) curve fitted to a reference voice (tools/fit_voice.py)
+    clone: bool = False  # convert MeloTTS speech to the reference speaker (sugar/audio/voice_clone.py)
+    clone_air_db: float = 0.0  # level of the >9.5 kHz band kept from the original synthesis (treble)
 
     @property
     def neutral(self) -> bool:
@@ -64,7 +66,7 @@ def _matched_profile() -> VoiceProfile | None:
     try:
         match = json.loads(MATCH_FILE.read_text(encoding="utf-8"))
         eq = tuple(zip(match["eq_hz"], match["eq_db"], strict=True))
-        return VoiceProfile("sid", register=float(match["register"]), pitch_steps=float(match["pitch_steps"]),
+        return VoiceProfile("sid_dsp", register=float(match["register"]), pitch_steps=float(match["pitch_steps"]),
                             pitch_method="psola",
                             compression=0.4, sdp_ratio=0.2, noise_scale=0.45, noise_scale_w=0.55,
                             pace=float(match["pace"]), eq=eq)
@@ -84,8 +86,22 @@ PROFILES: dict[str, VoiceProfile] = {
     # MeloTTS exactly as synthesised.
     "natural": VoiceProfile("natural"),
 }
-# "sid" is the voice matched to data/voice_samples/ULTRON_SID.mp3 (pitch, pace, spectrum); v2 until fitted.
-PROFILES["sid"] = _matched_profile() or PROFILES["sid_v2"]
+
+
+def _clone_profile() -> VoiceProfile | None:
+    """The cloned voice (tools/fit_clone.py): the reference speaker's timbre; only pace and treble fitted."""
+    try:
+        clone = json.loads(MATCH_FILE.read_text(encoding="utf-8"))["clone"]
+        return VoiceProfile("sid", clone=True, pace=float(clone["pace"]), clone_air_db=float(clone["air_db"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+# DSP-only approximation of ULTRON_SID.mp3 (pitch, pace, spectrum) — also the fallback when the
+# converter's model files are missing.
+PROFILES["sid_dsp"] = _matched_profile() or PROFILES["sid_v2"]
+# "sid": the voice cloned from data/voice_samples/ULTRON_SID.mp3.
+PROFILES["sid"] = _clone_profile() or PROFILES["sid_dsp"]
 
 
 def get_profile(name: str | None) -> VoiceProfile:

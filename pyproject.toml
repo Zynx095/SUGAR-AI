@@ -13,7 +13,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["melo", "venv", "data"]
+extend-exclude = ["melo", "openvoice", "venv", "data"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]
