@@ -95,10 +95,14 @@ def main(argv: list[str] | None = None) -> int:
 
     holder: dict = {"ready": threading.Event()}
     thread, holder = _start_core(core, holder)
-    holder["ready"].wait(timeout=30)
+    try:  # constructing the app can be slow (model loading); only give up if the core thread died
+        while not holder["ready"].wait(timeout=0.5) and thread.is_alive():
+            pass
+    except KeyboardInterrupt:
+        return 1
     app: SugarApp | None = holder.get("app")
     if app is None:
-        print("Sugar failed to start:", holder.get("error"))
+        print("Sugar failed to start:", holder.get("error") or "core exited before the app was created")
         return 1
 
     if window_mode != "none" and settings.ui.enabled:
