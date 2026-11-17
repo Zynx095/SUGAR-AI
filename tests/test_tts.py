@@ -178,7 +178,6 @@ def test_melo_engine_synthesizes_quickly():
     import time
 
     from sugar.audio.tts import MeloEngine
-
     from sugar.audio.voice_profile import PROFILES, apply_profile
 
     engine = MeloEngine(TTSSettings(voice_profile="natural"))  # the synthesis itself

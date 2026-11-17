@@ -29,6 +29,8 @@ AFTER_HEY = ["side", "said", "seed", "sit", "sed", "cyd", "sith"]
     ("S I D, status", True, "status"),
     ("run the tests, Sid.", True, "run the tests"),
     ("Hey side, explain recursion", True, "explain recursion"),  # Whisper's usual mishearing, after "hey"
+    ("Hesed, run the tests.", True, "run the tests."),  # measured: Whisper large-v3-turbo fused "Hey Sid"
+    ("The Hasidic tradition", False, "The Hasidic tradition"),
     ("put it on the left side", False, "put it on the left side"),
     ("I said hello", False, "I said hello"),
     ("His name is Sid", False, "His name is Sid"),

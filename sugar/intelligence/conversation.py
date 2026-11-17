@@ -76,6 +76,8 @@ def parse_yes_no(text: str) -> bool | None:
 
 _HEY = {"hey", "hi", "ok", "okay", "yo"}
 _SPELLED = re.compile(r"\b([sS])[\s.\-]+([iI])[\s.\-]+([dD])\b\.?")
+# Whisper sometimes fuses the phrase into one word: "Hey Sid," → "Hesed," / "Heysid".
+_FUSED_HEY_SID = re.compile(r"^(?:hey|hay|he|hi)s{1,2}(?:id|ed|yd|it|idd)$")
 
 
 def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tuple[str, ...] = ()) -> tuple[bool, str]:
@@ -107,7 +109,9 @@ def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tup
     for index in range(min(3, len(tokens))):
         prefix = [clean(t) for t in tokens[:index]]
         hey_before = bool(prefix) and prefix[-1] in _HEY
-        if is_wake(tokens[index]) or (hey_before and clean(tokens[index]) in after_hey):
+        word = clean(tokens[index])
+        if (is_wake(tokens[index]) or (hey_before and word in after_hey)
+                or (index == 0 and _FUSED_HEY_SID.match(word))):
             if all(p in {"hey", "hi", "ok", "okay", "yo", "oh", "so", "", "um", "uh"} for p in prefix):
                 remainder = " ".join(tokens[index + 1:]).lstrip(" ,.!?:;-")
                 return True, remainder
