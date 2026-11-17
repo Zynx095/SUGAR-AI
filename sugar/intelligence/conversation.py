@@ -77,9 +77,16 @@ def parse_yes_no(text: str) -> bool | None:
 _HEY = {"hey", "hi", "ok", "okay", "yo", "hay", "high"}
 _SPELLED = re.compile(r"\b([sS])[\s.\-]+([iI])[\s.\-]+([dD])\b\.?")
 # Whisper sometimes fuses the phrase into one word: "Hey Sid," -> "Hesed," / "Heysid" / "Acid" / "Asid".
-_FUSED_HEY_SID = re.compile(r"^(?:(?:hey|hay|he|hi)s{1,2}(?:id|ed|yd|it|idd)|a(?:c|s|ss)id|asyd)$")
+_FUSED_HEY_SID = re.compile(r"^(?:(?:hey|hay|he|hi|ha)s{1,2}(?:id|ed|yd|it|idd)|(?:ha|he|hay)c(?:ed|id)|a(?:c|s|ss)id|asyd)$")
 # Two-word forms Whisper produced from a real "Hey SID" on this machine's microphone ("He said.").
 _HEY_FORMS = {"he", "hey", "hi", "hay", "a", "high", "ok", "okay"}
+
+
+def wake_match_kind(text: str, wake_words: list[str]) -> str:
+    """'exact' when the transcript contains the name itself ("SID", "Syd"); 'variant' for look-alikes
+    ("He said", "acid", "Hesed") that need acoustic confirmation."""
+    words = {re.sub(r"[^a-z]", "", token.lower()) for token in _SPELLED.sub("SID", text).split()}
+    return "exact" if words & set(wake_words) else "variant"
 
 
 def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tuple[str, ...] = ()) -> tuple[bool, str]:
@@ -472,9 +479,9 @@ class ConversationManager:
             self._bus.publish("error", source="stt", message="Speech recognition failed.")
             self._settle_state("stt error")
             return
-        await self._handle_transcript(state, transcript)
+        await self._handle_transcript(state, transcript, event.audio)
 
-    async def _handle_transcript(self, state: UtteranceState, transcript: Transcript) -> None:
+    async def _handle_transcript(self, state: UtteranceState, transcript: Transcript, audio=None) -> None:
         if not transcript.ok:
             self._settle_state("rejected transcript")
             return
@@ -484,9 +491,25 @@ class ConversationManager:
             self._bus.publish("stt.echo", text=text)
             self._settle_state("echo")
             return
-        wake, remainder = split_wake_word(text, self._settings.conversation.wake_words,
-                                          self._settings.conversation.wake_words_after_hey)
-        if not wake and not self.is_engaged() and not state.engaged:
+        conv = self._settings.conversation
+        wake, remainder = split_wake_word(text, conv.wake_words, conv.wake_words_after_hey)
+        addressed_already = self.is_engaged() or state.engaged
+        if wake and not addressed_already:
+            kind = wake_match_kind(text, conv.wake_words)
+            verified = None
+            if kind == "variant" and conv.wake_verify and audio is not None and hasattr(self._stt, "verify_wake"):
+                # "He said…" might be "Hey SID…": listen again to the opening, biased toward the name, and only
+                # wake if the name is really there.
+                loop = asyncio.get_running_loop()
+                verified, heard, ms = await loop.run_in_executor(self._stt_pool, self._stt.verify_wake, audio)
+                log_event("WAKE_VERIFY", text=text, heard=heard, verified=verified, ms=ms)
+                if not verified:
+                    self._bus.publish("wake.rejected", text=text, heard=heard, ms=ms)
+                    self._bus.publish("stt.ignored", text=text)
+                    self._settle_state("wake not confirmed")
+                    return
+            self._bus.publish("wake.detected", text=text, kind=kind, verified=verified)
+        if not wake and not addressed_already:
             self._bus.publish("stt.ignored", text=text)
             self._settle_state("not addressed")
             return

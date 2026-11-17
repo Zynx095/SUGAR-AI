@@ -145,6 +145,7 @@ class ConversationSettings(BaseModel):
     wake_words: list[str] = Field(default_factory=lambda: ["sid", "syd", "sidd", "sydd", "cid"])
     wake_words_after_hey: list[str] = Field(default_factory=lambda: ["side", "said", "seed", "sit", "sed", "cyd", "sith"])
     engagement: Literal["wake_word", "always"] = "wake_word"
+    wake_verify: bool = True  # re-check look-alike wake transcripts ("He said") acoustically before waking
     # Operate the PC (apps, windows, browser, YouTube/Spotify, files, terminal) as well as engineering work.
     desktop_control: bool = True
     # "universal": SID handles any legitimate request. "engineering_only": the strict v1 boundary.

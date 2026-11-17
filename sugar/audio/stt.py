@@ -179,6 +179,24 @@ class SpeechRecognizer:
                 seen[word] = None
         self.vocabulary = list(seen)[:40]
 
+    def verify_wake(self, audio: np.ndarray, seconds: float = 2.2) -> tuple[bool, str, int]:
+        """Re-listen to the opening of an utterance, biased toward "Hey SID", and report whether the name is
+        actually there. Used only for look-alike transcripts ("He said…"); returns (verified, heard, ms)."""
+        holder = self.fast or self.final
+        if holder is None or holder.model is None:
+            return True, "", 0  # no recogniser to check with: keep the original decision
+        started = time.perf_counter()
+        clip = audio[: int(16000 * seconds)].astype(np.float32, copy=False)
+        with self._lock:
+            segments, _info = holder.model.transcribe(
+                clip, language=self._settings.language, beam_size=3, vad_filter=False, without_timestamps=True,
+                condition_on_previous_text=False, initial_prompt="Hey SID. SID, run the tests. Hey SID,",
+            )
+            heard = "".join(segment.text for segment in segments).strip()
+        words = re.findall(r"[a-z]+", heard.lower())[:4]
+        verified = any(word in {"sid", "syd", "sidd", "cid", "sydd"} for word in words)
+        return verified, heard, int((time.perf_counter() - started) * 1000)
+
     def transcribe(self, audio: np.ndarray, *, final: bool, evidence: Evidence | None = None) -> Transcript:
         """Blocking — call from the STT worker thread."""
         holder = self.final if final else self.fast

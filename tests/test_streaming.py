@@ -35,8 +35,10 @@ def test_first_chunk_is_available_before_the_stream_ends():
 def test_no_split_inside_decimals_abbreviations_or_initials():
     chunks = stream("It costs 3.14 dollars, e.g. per call, and Dr. Smith from the U.S. office agrees. "
                     "J. R. R. Tolkien wrote it. Next sentence follows here for sure.", step=2)
-    assert chunks[0].startswith("It costs 3.14 dollars, for example per call, and Dr. Smith")
-    assert "office agrees." in chunks[0]
+    opening = " ".join(chunks[:2])  # a long opening sentence may start speaking at its first clause
+    assert opening.startswith("It costs 3.14 dollars, for example per call, and Dr. Smith")
+    assert "office agrees." in opening
+    assert not chunks[0].rstrip().endswith(("3.", "Dr.", "U.S.", "e.g."))
 
 
 def test_later_chunks_merge_short_sentences():
@@ -126,3 +128,22 @@ def test_speakable_summary_skips_code_and_limits_length():
     summary = speakable_summary("## Summary\nI fixed three bugs.\n```js\nx()\n```\n- One\n- Two\n- Three\n\nAll tests pass.")
     assert summary.startswith("Summary. I fixed three bugs.")
     assert "x()" not in summary
+
+
+def test_streamed_chunks_lose_and_duplicate_no_words():
+    """Token-by-token streaming must reproduce exactly the words of the reply, in order."""
+    import re
+
+    from sugar.intelligence.response import SpeechChunker
+
+    text = ("When you compile the project with optimisations enabled, the linker removes unused symbols, "
+            "which is why the binary shrinks. The test suite passed on the first run; one warning remains in "
+            "the dependency audit, and it is unrelated. Next, I'll look at the cache layer.")
+    chunker = SpeechChunker(max_spoken_chars=None)
+    chunks = []
+    for i in range(0, len(text), 3):  # three characters at a time, like a token stream
+        chunks.extend(chunker.feed(text[i:i + 3]))
+    chunks.extend(chunker.flush())
+    words = lambda s: re.findall(r"[a-z0-9']+", s.lower())  # noqa: E731
+    assert words(" ".join(chunks)) == words(text)
+    assert len(chunks[0]) < 70  # the long opening sentence starts at its first clause

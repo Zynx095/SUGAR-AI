@@ -306,3 +306,40 @@ def test_barge_in_stops_speech_and_cancels_the_turn(settings):
     assert speaking is False
     assert silent_after == 0.0
     assert turn is None
+
+
+@pytest.mark.parametrize(("text", "kind"), [
+    ("Hey Sid, run the tests.", "exact"), ("Syd, status", "exact"), ("S.I.D. open it", "exact"),
+    ("He said the build is failing.", "variant"), ("Haced run the tests.", "variant"), ("acid", "variant"),
+])
+def test_wake_match_kind(text, kind):
+    from sugar.intelligence.conversation import wake_match_kind
+
+    assert wake_match_kind(text, WAKE) == kind
+
+
+def test_look_alike_wake_is_verified_before_waking(settings):
+    """'He said…' wakes SID only if a second, name-biased listen hears 'SID'."""
+    async def scenario(verified):
+        app = make_app(settings, [{"text": ["Sure."]}])
+
+        class VerifyingSTT(FakeSTT):
+            def verify_wake(self, audio):
+                return verified, "hey SID run the tests" if verified else "he said the build is failing", 5
+
+        app.conversation._stt = VerifyingSTT("He said, run the tests.")
+        app.conversation._pipeline = FakePipeline()
+        await app.start()
+        app.conversation.disengage()
+        events = []
+        app.bus.subscribe("wake.*", events.append)
+        app.bus.subscribe("stt.ignored", events.append)
+        start, end = voice_events(1)
+        app.conversation.on_voice_event(start)
+        app.conversation.on_voice_event(end)
+        await asyncio.sleep(0.5)
+        await app.shutdown()
+        return [e.type for e in events]
+
+    assert run(scenario(False)) == ["wake.rejected", "stt.ignored"]
+    assert run(scenario(True))[0] == "wake.detected"
