@@ -43,7 +43,7 @@ def test_natural_profile_is_untouched():
 def test_sid_profile_lowers_the_voice_into_a_baritone_register():
     shaped = apply_profile(voiced(200.0), RATE, PROFILES["sid"])
     f0 = fundamental(shaped)
-    assert 100 <= f0 <= 125, f0  # MeloTTS EN-Newest speaks around 200 Hz; SID sits near 112 Hz
+    assert 75 <= f0 <= 92, f0  # MeloTTS EN-Newest speaks around 200 Hz; ULTRON_SID.mp3 sits at 83 Hz
 
 
 def test_register_shift_is_compensated_by_faster_synthesis():
@@ -72,3 +72,35 @@ def test_processing_is_cheap_enough_for_streaming():
     started = time.perf_counter()
     apply_profile(audio, RATE, profile)
     assert time.perf_counter() - started < 0.6  # ~0.2 s measured for a 5 s sentence
+
+
+def test_sid_is_the_profile_fitted_to_the_reference_recording():
+    from sugar.audio.voice_profile import MATCH_FILE
+
+    sid = PROFILES["sid"]
+    assert MATCH_FILE.exists() and sid.pitch_method == "psola" and len(sid.eq) > 50
+
+
+def test_psola_halves_pitch_and_keeps_duration():
+    from sugar.audio.voice_profile import _psola
+
+    audio = voiced(200.0)
+    shifted = _psola(audio, RATE, 0.5)
+    assert shifted.size == audio.size
+    assert 92 <= fundamental(shifted) <= 108
+
+
+def test_psola_keeps_the_treble():
+    """Unlike resample-based shifting, PSOLA must not squeeze energy out of the top octave."""
+    from sugar.audio.voice_profile import _psola
+
+    rng = np.random.default_rng(1)
+    audio = voiced(200.0) + (0.02 * rng.standard_normal(RATE * 2)).astype(np.float32)
+    shifted = _psola(audio, RATE, 0.5)
+
+    def top_share(y):
+        spectrum = np.abs(np.fft.rfft(y)) ** 2
+        freqs = np.fft.rfftfreq(y.size, 1 / RATE)
+        return spectrum[freqs > 8000].sum() / spectrum.sum()
+
+    assert top_share(shifted) > 0.5 * top_share(audio)
