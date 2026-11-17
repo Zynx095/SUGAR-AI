@@ -356,3 +356,22 @@ def test_status_question_reports_only_real_work(settings, tmp_path):
         return reply
 
     assert run(scenario())["text"].startswith("No engineering task is active.")
+
+
+@pytest.mark.parametrize(("text", "path"), [
+    # regression: a live run created "sid-smoke-1. Keep it under 30 lines in total" before this was fixed
+    ("Create a Python app in D:\work\sid-smoke-1. Keep it under 30 lines in total and run the test.",
+     "D:\work\sid-smoke-1"),
+    ("Create a React app in D:\College\shop with auth", "D:\College\shop"),
+    ("make a site in D:\College\My Site, then add a footer", "D:\College\My Site"),
+    ("put it in D:\College\v1.2 and test it", "D:\College\v1.2"),
+    ('scaffold it in "D:\College\a, b" now', "D:\College\a, b"),
+    ("fix the bug", None),
+])
+def test_typed_target_paths_stop_at_the_clause_boundary(text, path):
+    from pathlib import Path
+
+    from sugar.coding.projects import extract_target_path
+
+    found = extract_target_path(text)
+    assert (str(found) if found else None) == (str(Path(path)) if path else None)

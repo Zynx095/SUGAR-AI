@@ -282,9 +282,13 @@ def _search_below(root: Path, tail_words: list[str], max_depth: int = 3) -> Path
 
 # --------------------------------------------------------------------------- typed target directories
 
+# The path ends at the first clause boundary: a connector word, a sentence end (". "), a comma or the end.
+# A quoted path may contain anything but the quote. Folder names with spaces ("My Site") are kept.
 _TYPED_PATH = re.compile(
-    r"(?:^|\s)(?:in|at|into|under|inside|to)\s+[\"'`]?(?P<path>[A-Za-z]:[\\/][^\"'`\n]*?)[\"'`]?"
-    r"(?=\s+(?:with|using|and|that|which|for|so)\b|[.,;!?]?\s*$)",
+    r"(?:^|\s)(?:in|at|into|under|inside|to)\s+(?:"
+    r"[\"'`](?P<quoted>[A-Za-z]:[\\/][^\"'`\n]*)[\"'`]|"
+    r"(?P<path>[A-Za-z]:[\\/][^\"'`\n,;!?]*?)"
+    r"(?=\s+(?:with|using|and|that|which|for|so|then|but|to|please)\b|\.(?:\s|$)|[,;!?]|\s*$))",
     re.IGNORECASE,
 )
 
@@ -294,8 +298,8 @@ def extract_target_path(text: str) -> Path | None:
     match = _TYPED_PATH.search(text)
     if not match:
         return None
-    raw = match.group("path").strip().rstrip(".,;!? ")
-    if not raw or len(raw) < 3:
+    raw = (match.group("quoted") or match.group("path") or "").strip().rstrip(". ")
+    if not raw or len(raw) < 3 or re.search(r"[<>|*?\"]", raw):
         return None
     return Path(raw)
 

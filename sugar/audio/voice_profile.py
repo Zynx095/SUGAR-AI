@@ -55,9 +55,9 @@ class VoiceProfile:
 
 PROFILES: dict[str, VoiceProfile] = {
     # SID: deep, controlled, a little metallic. Paired with a measured speaking rate (tts.speed ≈ 0.95).
-    # Measured on the RTX 5050 (data/voice_samples): median F0 ≈ 128 Hz (raw MeloTTS ≈ 201 Hz), Whisper
-    # small.en word error rate 0 on the reference sentences, ≈ 70 ms of DSP per sentence. Going to -6.5
-    # semitones reached 118 Hz but Whisper started mishearing words, so the register stops here.
+    # Measured on the RTX 5050 over 12 synthesised sentences (samples in data/voice_samples): median F0
+    # 127 Hz (raw MeloTTS 203 Hz); Whisper small.en word error rate 1.0% (raw MeloTTS 1.6%); ~40 ms of
+    # DSP per ~5 s sentence. At -6.5 semitones F0 reached 118 Hz but Whisper began mishearing words.
     "sid": VoiceProfile("sid", register=0.86, pitch_steps=-5.5, resonance=0.14, resonance_ms=2.2,
                         resonance_feedback=0.3, texture=0.04, texture_hz=48.0, low_shelf_db=3.0, presence_db=-1.0,
                         lowpass_hz=9500.0, compression=0.55),
@@ -135,23 +135,30 @@ def length_scale_factor(profile: VoiceProfile) -> float:
 
 
 def apply_profile(audio: np.ndarray, rate: int, profile: VoiceProfile) -> np.ndarray:
-    """Shape raw TTS output (float32 mono at ``rate``) into the profile's voice. Returns the same rate."""
+    """Shape raw TTS output (float32 mono at ``rate``) into the profile's voice. Returns the same rate.
+
+    The work happens at half of MeloTTS's 44.1 kHz: the profile low-passes speech below ~10 kHz anyway,
+    and the phase vocoder costs half as much there.
+    """
     if audio.size == 0 or profile.neutral:
         return audio.astype(np.float32, copy=False)
+    import soxr
     from scipy.signal import lfilter
 
     x = audio.astype(np.float32, copy=False)
     peak_in = float(np.max(np.abs(x))) or 1.0
+    work = rate // 2 if rate > 32000 and profile.lowpass_hz and profile.lowpass_hz < rate / 4 - 400 else rate
+    final_rate = rate
+    rate = work
 
-    # 1. register: play the samples back slower (more samples at the same rate) → lower pitch and formants.
-    if profile.register != 1.0:
-        import soxr
-
-        x = soxr.resample(x, rate, rate / profile.register).astype(np.float32)
+    # 1. register: the same samples played at a lower rate (resampled up) → lower pitch and formants.
+    #    Resampling straight to the working rate folds the decimation into the same pass.
+    if profile.register != 1.0 or work != final_rate:
+        x = soxr.resample(x, final_rate, work / profile.register).astype(np.float32)
     if profile.pitch_steps:
         import librosa
 
-        x = librosa.effects.pitch_shift(x, sr=rate, n_steps=profile.pitch_steps, n_fft=2048,
+        x = librosa.effects.pitch_shift(x, sr=work, n_steps=profile.pitch_steps, n_fft=1024 if work < 32000 else 2048,
                                         res_type="soxr_hq").astype(np.float32)
 
     # 2. resonance: y[n] = x[n] + g·y[n−D]
@@ -178,6 +185,8 @@ def apply_profile(audio: np.ndarray, rate: int, profile: VoiceProfile) -> np.nda
     if profile.gain_db:
         x = x * np.float32(10 ** (profile.gain_db / 20))
     # Keep the loudness where the raw voice was, then soft-limit any peaks.
+    if work != final_rate:
+        x = soxr.resample(x, work, final_rate).astype(np.float32)
     peak = float(np.max(np.abs(x))) or 1.0
     x = x * np.float32(min(peak_in, 0.95) / peak)
     return np.tanh(x * 1.1).astype(np.float32) / np.float32(np.tanh(1.1))

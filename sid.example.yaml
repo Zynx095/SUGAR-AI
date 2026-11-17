@@ -1,4 +1,4 @@
-# Copy to sugar.yaml to customise. Every key is optional; defaults live in
+# Copy to sid.yaml to customise. Every key is optional; defaults live in
 # sugar/config/settings.py. Runtime changes made in the UI go to data/overrides.json.
 
 paths:
@@ -15,7 +15,8 @@ stt:
 
 tts:
   voice: EN-Newest
-  speed: 1.1
+  voice_profile: sid                    # sid | sid_clean | natural
+  speed: 0.97
 
 vad:
   endpoint_complete_ms: 380             # silence before ending a clearly finished request
@@ -24,7 +25,7 @@ vad:
 
 conversation:
   user_name: Yuki
-  engagement: wake_word                 # wake_word | always
+  engagement: wake_word                 # wake_word ("Hey SID") | always
   engagement_timeout_s: 45
 
 llm:
@@ -40,6 +41,7 @@ permissions:
 
 coding:
   model: opus
+  task_timeout_s: 1800                  # stop a Claude Code run after 30 minutes
   permission_mode: auto                 # Claude Code permission mode for work tasks
   project_roots: [D:\College, D:\College\SOMESHIT DOWNLOADS, D:\College\WEBSITES]
 

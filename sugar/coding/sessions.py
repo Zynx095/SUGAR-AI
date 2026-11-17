@@ -510,10 +510,11 @@ class CodingSessionManager:
             command = str(payload.get("command", ""))
             kind = "tests" if TEST_COMMAND.search(command) else "build" if BUILD_COMMAND.search(command) else None
             if kind and event.data.get("id"):
-                self._pending_checks[event.data["id"]] = {"kind": kind, "command": command[:160],
-                                                          "session": session.id}
-                session.checks[kind] = {"command": redact_secrets(command[:160]), "status": "running",
-                                        "ts": time.time()}
+                # Show Claude Code's own description of the step when it gave one; otherwise the first line.
+                lines = command.strip().splitlines() or [""]
+                label = str(payload.get("description") or lines[0])[:160]
+                self._pending_checks[event.data["id"]] = {"kind": kind, "command": label, "session": session.id}
+                session.checks[kind] = {"command": redact_secrets(label), "status": "running", "ts": time.time()}
                 self._bus.publish("coding.check", project=session.project_name, project_path=session.project_path,
                                   kind=kind, status="running", command=session.checks[kind]["command"])
             self._bus.publish("coding.progress", project=session.project_name, project_path=session.project_path,

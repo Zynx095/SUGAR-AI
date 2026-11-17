@@ -92,7 +92,7 @@ def test_task_streams_progress_and_records_session_cost_usage_and_checks(setting
     assert session.claude_session_id == "fake-session-1"
     assert session.last_cost_usd == pytest.approx(0.0123)
     assert session.last_usage == {"input_tokens": 1500, "output_tokens": 320, "cache_read_input_tokens": 9000}
-    assert session.checks["tests"]["status"] == "passed" and "pytest" in session.checks["tests"]["command"]
+    assert session.checks["tests"] | {"ts": 0} == {"status": "passed", "command": "Run tests", "ts": 0}
     assert session.last_duration_ms and session.last_duration_ms > 0
     record = session.history[-1]
     assert record["status"] == "completed" and record["project_path"] == shop.path
