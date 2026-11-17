@@ -27,9 +27,12 @@ from enum import StrEnum
 from typing import Any
 
 from sugar.config.settings import Settings
+from sugar.intelligence import self_commands
+from sugar.intelligence.categories import SPECS, Category, UniversalClassification, classify_universal
 from sugar.intelligence.domain import Classification, EngineeringIntent, RequestContext, classify
 from sugar.intelligence.fastpath import FastPath, Intent, normalize
 from sugar.intelligence.working import WorkingMemory
+from sugar.providers.routing import ProviderRouter
 
 
 class Route(StrEnum):
@@ -39,8 +42,9 @@ class Route(StrEnum):
     PROJECT_ANALYSIS = "project_analysis"
     BUILD_EXECUTION = "build_execution"
     DESKTOP = "desktop"
+    ANSWER = "answer"  # any other request: a model chosen for the category (conversation, knowledge, writing…)
     CLARIFY = "clarify"
-    REJECTED = "rejected"
+    REJECTED = "rejected"  # only in the engineering-only scope
 
 
 EXECUTION_ROUTES = frozenset({Route.PROJECT_ANALYSIS, Route.BUILD_EXECUTION})
@@ -57,9 +61,16 @@ class RouteDecision:
     purpose: str = "chat"
     classification: Classification | None = None
     project: Any | None = None  # a project the request itself names ("…in Jiva")
+    universal: UniversalClassification | None = None
+    instructions: str = ""
+    max_steps: int = 1
+    mode: str | None = None  # entity mode: creative | research
+    local_only: bool = False  # private data: local providers only
 
     @property
     def category(self) -> str | None:
+        if self.universal is not None:
+            return self.universal.category.value
         return self.classification.intent.value if self.classification else None
 
 
@@ -126,8 +137,10 @@ _NAMED_PROJECT = re.compile(
 
 class Router:
     def __init__(self, settings: Settings, fastpath: FastPath, working: WorkingMemory,
-                 coding_active: Callable[[], bool] = lambda: False) -> None:
+                 coding_active: Callable[[], bool] = lambda: False, providers: ProviderRouter | None = None) -> None:
         self._settings = settings
+        self.providers = providers
+        self.health_authorized = False  # this session: personal health data may go to online models
         self._fastpath = fastpath
         self._working = working
         self._coding_active = coding_active
@@ -191,6 +204,9 @@ class Router:
                 intent = Intent("media.search", {"platform": platform, "query": query}, plain_text,
                                 call=("media.search", {"platform": platform, "query": query}))
                 return RouteDecision(Route.DESKTOP, f"{platform} search", intent)
+        own = self_commands.parse(text)
+        if own is not None:
+            return RouteDecision(Route.COMMAND, f"setting {own.name}", own)
         intent = self._fastpath.match(text)
         if intent is not None:
             if intent.domain == "control":
@@ -227,6 +243,9 @@ class Router:
                                  r"maximi[sz]e|go to|search youtube|search spotify)\b", plain))):
             return self._desktop_agent("computer operation")
 
+        if self._settings.conversation.scope != "engineering_only":
+            return self._universal(text, plain, classification, context, project)
+
         if category == EngineeringIntent.NON_ENGINEERING:
             return RouteDecision(Route.REJECTED, classification.reason, classification=classification)
         if classification.ambiguous:
@@ -241,3 +260,44 @@ class Router:
                                  classification=classification)
         route = Route.PROJECT_ANALYSIS if category == EngineeringIntent.PROJECT_ANALYSIS else Route.BUILD_EXECUTION
         return RouteDecision(route, classification.reason, classification=classification, project=project)
+
+    # ------------------------------------------------------------------ universal routing
+
+    def _chain(self, route_key: str, *, need_tools: bool = False, local_only: bool = False) -> list[str]:
+        if self.providers is None:
+            return list(self._settings.llm.chat_chain)
+        return self.providers.chain_for(route_key, need_tools=need_tools, local_only=local_only).chain
+
+    def _universal(self, text: str, plain: str, classification: Classification, context: RequestContext,
+                   project: Any) -> RouteDecision:
+        universal = classify_universal(text, context)
+        if self._working.roleplay and universal.category not in (Category.BUILD_EXECUTION,
+                                                                  Category.PROJECT_ANALYSIS):
+            universal = UniversalClassification(Category.ROLEPLAY, "roleplay in progress", universal.engineering,
+                                                universal.flags)
+        category = universal.category
+        if category == Category.AMBIGUOUS:
+            return RouteDecision(Route.CLARIFY, universal.reason, classification=classification, project=project,
+                                 universal=universal)
+        if category in (Category.BUILD_EXECUTION, Category.PROJECT_ANALYSIS):
+            route = Route.PROJECT_ANALYSIS if category == Category.PROJECT_ANALYSIS else Route.BUILD_EXECUTION
+            return RouteDecision(route, universal.reason, classification=classification, project=project,
+                                 universal=universal)
+        if category == Category.CODING_QA:
+            deep = bool(_DEEP.search(plain)) or len(plain.split()) >= 35
+            return RouteDecision(Route.CODING_QA, universal.reason, chain=self._chain("coding_qa"),
+                                 purpose="reasoning" if deep else "chat", classification=classification,
+                                 universal=universal)
+        spec = SPECS.get(category, SPECS[Category.GENERAL_KNOWLEDGE])
+        local_only = (category == Category.HEALTH_INFORMATION and universal.flags.get("personal_health", False)
+                      and not (self.health_authorized or self._settings.conversation.health_external))
+        need_tools = bool(spec.tool_names)
+        purpose = spec.purpose
+        if category == Category.GENERAL_KNOWLEDGE and (_DEEP.search(plain) or len(plain.split()) >= 35):
+            purpose = "reasoning"
+        return RouteDecision(
+            Route.ANSWER, universal.reason, chain=self._chain(spec.route, need_tools=need_tools, local_only=local_only),
+            tool_groups={"agent", "chat", "computer", "coding"} if need_tools else None,
+            tool_names=set(spec.tool_names) or None, purpose=purpose, classification=classification,
+            universal=universal, instructions=spec.instructions, max_steps=spec.max_steps, mode=spec.mode,
+            local_only=local_only)

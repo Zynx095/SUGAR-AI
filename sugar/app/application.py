@@ -20,7 +20,9 @@ from typing import Any
 from sugar.agent.executor import ToolExecutor
 from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
+from sugar.app.self_tools import register_self_tools, voice_state
 from sugar.audio.voice_profile import PROFILES as VOICE_PROFILES
+from sugar.audio.voices import IDENTITIES, describe
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
 from sugar.computer import ComputerControl
@@ -36,10 +38,12 @@ from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.conversation import ConversationManager
 from sugar.intelligence.fastpath import DesktopView, FastPath
 from sugar.intelligence.orchestrator import Orchestrator
+from sugar.intelligence.personality import PERSONALITIES
 from sugar.intelligence.router import Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.memory.store import MemoryStore
 from sugar.providers import build_provider_pool
+from sugar.providers.routing import ProviderRouter
 from sugar.tools import build_registry
 from sugar.tools.calculator import evaluate_spoken_math
 from sugar.tools.services import ToolServices
@@ -74,6 +78,10 @@ class SIDApp:
         self.computer = ComputerControl(settings, self.apps, self.spotify)
         self.shared_state: dict[str, Any] = {}
         self.pool = build_provider_pool(settings, self.bus)
+        from sugar.providers.ollama_server import OllamaServer
+
+        self.ollama_server = OllamaServer(settings.llm.ollama.base_url, settings.llm.ollama.executable,
+                                          settings.llm.ollama.models_dir)
 
         self.services = ToolServices(settings, self.bus, self.apps, self.projects, self.sessions, self.memory,
                                      self.working, self.spotify, self.computer, data, self.shared_state)
@@ -82,7 +90,9 @@ class SIDApp:
         self.executor = ToolExecutor(self.registry, self.permissions, self.bus)
         self.fastpath = FastPath(resolve_app=self.computer.apps.resolve_name, resolve_project=self.projects.resolve,
                                  evaluate_math=evaluate_spoken_math, desktop=self.desktop_view)
-        self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()))
+        self.provider_router = ProviderRouter(self.pool, settings.llm.routes)
+        self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()),
+                             providers=self.provider_router)
         self.context = ContextBuilder(settings, self.memory, self.working, lambda: self.conversation.conversation_id,
                                       extra_context=self._extra_context)
         self.agent = AgentLoop(self.pool, self.executor, self.registry, self.bus)
@@ -98,6 +108,7 @@ class SIDApp:
         self.player = AudioPlayer(device=settings.audio.output_device)
         self.player.volume = settings.tts.volume
         self.speech = SpeechOutput(self.synth, self.player, self.bus)
+        register_self_tools(self)
         self.stt = None
         self.pipeline = None
         if voice:
@@ -117,6 +128,7 @@ class SIDApp:
             self.permissions, self.memory, self.working, self.sessions, self.shared_state,
             stt=self.stt, pipeline=self.pipeline,
         )
+        self.conversation.on_idle_stop = self._stop_media
         self.components: dict[str, dict[str, Any]] = {}
         self.ui = None
         self.ui_ready = threading.Event()  # set once the UI server is listening (window can open)
@@ -278,9 +290,25 @@ class SIDApp:
                         f"Claude Code {cli.version}" if cli else "claude CLI not found")
 
     async def _check_providers(self) -> None:
+        ollama = self.settings.llm.ollama
+        if ollama.enabled and ollama.manage_server and "ollama" in self.pool.providers:
+            status = await self.ollama_server.ensure_running()
+            log_event("OLLAMA_SERVER", status=status)
         report = await self.pool.check_health()
         for name, info in report.items():
             self._component(f"llm:{name}", "ready" if info["ok"] else "unavailable", info["detail"])
+        self.bus.publish("providers.status", connectivity=self.pool.connectivity())
+        # Keep availability honest: re-check every minute so a provider that comes back is used again
+        # and one that went away is benched (instead of timing out on every request).
+        while True:
+            await asyncio.sleep(60)
+            report = await self.pool.check_health()
+            for name, info in report.items():
+                previous = self.components.get(f"llm:{name}", {}).get("status")
+                status = "ready" if info["ok"] else "unavailable"
+                if status != previous:
+                    self._component(f"llm:{name}", status, info["detail"])
+            self.bus.publish("providers.status", connectivity=self.pool.connectivity())
 
     def vocabulary_refresh(self) -> None:
         if self.stt is not None:
@@ -310,6 +338,7 @@ class SIDApp:
         if self.ui is not None:
             await self.ui.stop()
         await self.pool.aclose()
+        self.ollama_server.stop()
         self.memory.close()
 
     # ------------------------------------------------------------------ UI bridge
@@ -337,6 +366,11 @@ class SIDApp:
             "pending_task": (self.orchestrator.pending.text if self.orchestrator.pending
                              and self.orchestrator.pending.fresh else None),
             "voice_profiles": list(VOICE_PROFILES),
+            "voice": voice_state(self),
+            "voice_identities": [describe(i, self.settings.tts.palettes) for i in IDENTITIES],
+            "personalities": [{"id": p.id, "name": p.name} for p in PERSONALITIES.values()],
+            "connectivity": self.pool.connectivity(),
+            "roleplay": bool(self.working.roleplay),
         }
 
     async def handle_command(self, message: dict[str, Any]) -> dict[str, Any] | None:

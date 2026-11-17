@@ -166,6 +166,7 @@ def test_undo_goes_to_coding_after_coding_work():
 
 def test_computer_requests_never_route_to_desktop_tools_when_desktop_control_is_off(settings):
     settings.conversation.desktop_control = False
+    settings.conversation.scope = "engineering_only"
     router = Router(settings, grammar(), WorkingMemory())
     for text in ("Open a new notepad and start writing a Fibonacci code using recursive function.",
                  "write directly into the notepad", "close the tab with the error", "summarize this page",
@@ -181,6 +182,7 @@ def test_computer_requests_never_route_to_desktop_tools_when_desktop_control_is_
 def test_desktop_commands_are_refused_when_desktop_control_is_off(settings, monkeypatch):
     """Text → router → refusal: the desktop backend sees no launch, keystroke or close."""
     settings.conversation.desktop_control = False
+    settings.conversation.scope = "engineering_only"
     import sugar.computer.engine as engine
     from sugar.app.application import SIDApp
     from sugar.intelligence.domain import REFUSAL
@@ -221,7 +223,7 @@ def test_desktop_commands_are_refused_when_desktop_control_is_off(settings, monk
     assert all(r["route"] == "rejected" and r["text"] == REFUSAL for r in replies)
 
 
-def test_stop_with_nothing_to_stop_leaves_the_music_alone(settings, monkeypatch):
+def test_stop_with_nothing_to_stop_pauses_the_music(settings, monkeypatch):
     import sugar.computer.engine as engine
     from sugar.app.application import SIDApp
     from sugar.computer.backend import MediaSession
@@ -242,7 +244,7 @@ def test_stop_with_nothing_to_stop_leaves_the_music_alone(settings, monkeypatch)
         await app.shutdown()
 
     run(scenario())
-    assert desktop.media_log == []
+    assert desktop.media_log == [("SpotifyAB.SpotifyMusic!Spotify", "pause")]
 
 
 def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):

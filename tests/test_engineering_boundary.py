@@ -180,6 +180,7 @@ NON_ENGINEERING = ["What's the weather in Python?", "Tell me a joke about Java",
 
 def test_non_engineering_requests_reach_no_model_no_tool_and_no_claude_code(settings, tmp_path):
     settings.conversation.desktop_control = False  # the strict engineering-only mode
+    settings.conversation.scope = "engineering_only"
 
     async def scenario():
         app, provider, started, tools = make_app(settings, tmp_path)
@@ -379,18 +380,22 @@ def test_typed_target_paths_stop_at_the_clause_boundary(text, path):
     assert (str(found) if found else None) == (str(Path(path)) if path else None)
 
 
-def test_with_desktop_control_small_talk_is_still_refused_and_never_reaches_claude_code(settings, tmp_path):
+def test_universal_requests_reach_a_model_but_never_claude_code_or_tools(settings, tmp_path):
     async def scenario():
-        app, provider, started, tools = make_app(settings, tmp_path)
+        app, provider, started, tools = make_app(settings, tmp_path, [{"text": ["A light joke."]},
+                                                                     {"text": ["A film suggestion."]},
+                                                                     {"text": ["Doing well."]}])
         await app.start()
         replies = [await say(app, text) for text in ("Tell me a joke about Java", "Recommend a movie",
-                                                     "How are you?", "Who won the match yesterday?")]
+                                                     "How are you?")]
         await app.shutdown()
-        return replies, provider, started
+        return replies, provider, started, tools
 
-    replies, provider, started = run(scenario())
-    assert all(r["text"] == REFUSAL for r in replies)
-    assert provider.calls == [] and started == []
+    replies, provider, started, tools = run(scenario())
+    assert [r["text"] for r in replies] == ["A light joke.", "A film suggestion.", "Doing well."]
+    assert all(r["route"] == "answer" for r in replies)
+    assert started == [] and tools == []
+    assert all(call.get("tools") is None for call in provider.calls)
 
 
 def test_spotify_search_opens_the_app_search_page(settings, tmp_path, monkeypatch):

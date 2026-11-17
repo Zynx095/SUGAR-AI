@@ -146,11 +146,20 @@ class MeloEngine:
             converter = self._clone_converter()
             if converter is not None:
                 try:
-                    return converter.convert(raw, self.sample_rate, air_db=profile.clone_air_db)
+                    return self._offset(converter.convert(raw, self.sample_rate, air_db=profile.clone_air_db))
                 except Exception:
                     log.exception("voice conversion failed; using the DSP approximation for this sentence")
             profile = get_profile("sid_dsp")  # same voice, approximated without the converter
-        return apply_profile(raw, self.sample_rate, profile)
+        return self._offset(apply_profile(raw, self.sample_rate, profile))
+
+    def _offset(self, audio: np.ndarray) -> np.ndarray:
+        """The user's pitch adjustment ("deeper", "higher"), on top of any voice."""
+        offset = float(getattr(self._settings, "pitch_offset", 0.0) or 0.0)
+        if not offset or audio.size == 0:
+            return audio
+        from sugar.audio.voice_profile import _psola
+
+        return _psola(audio, self.sample_rate, 2 ** (offset / 12.0))
 
     def _clone_converter(self):
         """Load the OpenVoice converter once (models on D:, see voice_clone.py); None if unavailable."""

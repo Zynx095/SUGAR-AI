@@ -660,7 +660,7 @@ class ConversationManager:
     async def _run_turn(self, turn: ActiveTurn, coding_permission: bool | None) -> None:
         log_event("TURN_START", turn=turn.id, source=turn.source, text=turn.text)
         self._bus.publish("turn.started", turn_id=turn.id, text=turn.text, source=turn.source)
-        self._memory.add_turn(self.conversation_id, "user", turn.text, meta={"source": turn.source})
+        user_turn_id = self._memory.add_turn(self.conversation_id, "user", turn.text, meta={"source": turn.source})
         summary = None
         try:
             if coding_permission is not None:
@@ -680,13 +680,16 @@ class ConversationManager:
         finally:
             heard = turn.handle.spoken_text
             display = turn.display_text
+            if summary is not None and summary.context:  # keep the request with its context layer (roleplay…)
+                self._memory.update_turn_meta(user_turn_id, context=summary.context)
             if display:
                 # `heard` is stored only for interrupted replies: it is what the user actually got to hear,
                 # which is what the model must be told on the next turn.
                 self._memory.add_turn(self.conversation_id, "assistant", display,
                                       heard=heard if turn.cancelled else None,
                                       meta={"route": summary.route if summary else None,
-                                            "interrupted": turn.cancelled})
+                                            "interrupted": turn.cancelled,
+                                            "context": summary.context if summary else None})
                 self._shared["last_reply"] = display
                 self._working.last_assistant_text = display
             first_audio = turn.handle.first_audio_at

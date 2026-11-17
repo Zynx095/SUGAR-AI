@@ -85,6 +85,12 @@ PROFILES: dict[str, VoiceProfile] = {
                               pace=0.95),
     # MeloTTS exactly as synthesised.
     "natural": VoiceProfile("natural"),
+    # The female voice: MeloTTS's own EN-Newest speaker (a genuine female voice, not a pitch-shifted male),
+    # lightly levelled and brightened.
+    "female": VoiceProfile("female", presence_db=0.5, air_db=1.0, compression=0.3),
+    # A calm mid-register voice between the two.
+    "neutral": VoiceProfile("neutral", register=0.95, pitch_steps=-3.0, pitch_method="psola", low_shelf_db=1.0,
+                            compression=0.4),
 }
 
 

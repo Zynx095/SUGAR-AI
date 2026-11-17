@@ -77,6 +77,8 @@ class TTSSettings(BaseModel):
     voice: str = "EN-Newest"
     voice_profile: str = "sid"  # sid (cloned) | sid_dsp | sid_v2 | sid_clean | natural
     voice_reference: str = "data/voice_samples/ULTRON_SID.mp3"  # the voice "sid" is cloned from
+    pitch_offset: float = 0.0  # semitones added to any voice ("make your voice deeper")
+    palettes: dict[str, list[str]] = Field(default_factory=dict)  # per-voice entity colours (see audio/voices.py)
     clone_tau: float = 0.3  # OpenVoice conversion temperature
     speed: float = 0.97  # measured pacing
     sdp_ratio: float = 0.5
@@ -105,8 +107,13 @@ class FreeLLMSettings(BaseModel):
 class OllamaSettings(BaseModel):
     enabled: bool = True
     base_url: str = "http://127.0.0.1:11434"
-    chat_model: str = "gemma3:4b"
-    smart_model: str = "deepseek-r1:8b"
+    chat_model: str = "qwen2.5:3b"  # fits next to the voice models in 8 GB of VRAM
+    smart_model: str = "qwen2.5:3b"
+    # Portable Ollama on D: that SID starts itself when no server is running (models also on D:).
+    executable: str | None = r"D:\Sugar_Models\ollama\ollama.exe"
+    models_dir: str | None = r"D:\Sugar_Models\ollama\models"
+    manage_server: bool = True
+    supports_tools: bool = True
     keep_alive: str = "10m"
     timeout_s: float = 60.0
 
@@ -125,6 +132,7 @@ class LLMSettings(BaseModel):
     ollama: OllamaSettings = OllamaSettings()
     claude: ClaudeSettings = ClaudeSettings()
     chat_chain: list[str] = Field(default_factory=lambda: ["freellm", "ollama", "claude"])
+    routes: dict[str, list[str]] = Field(default_factory=dict)  # per-category provider chains (providers/routing.py)
     reasoning_chain: list[str] = Field(default_factory=lambda: ["claude", "freellm", "ollama"])
     temperature: float = 0.6
 
@@ -139,6 +147,10 @@ class ConversationSettings(BaseModel):
     engagement: Literal["wake_word", "always"] = "wake_word"
     # Operate the PC (apps, windows, browser, YouTube/Spotify, files, terminal) as well as engineering work.
     desktop_control: bool = True
+    # "universal": SID handles any legitimate request. "engineering_only": the strict v1 boundary.
+    scope: Literal["universal", "engineering_only"] = "universal"
+    personality: str = "sid"  # sid | cinematic | friendly | professional | creative
+    health_external: bool = False  # send personal health information to online models without asking
     engagement_timeout_s: float = 45.0
     history_turns: int = 12
     context_chars: int = 12000

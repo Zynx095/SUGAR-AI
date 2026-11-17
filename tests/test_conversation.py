@@ -139,7 +139,9 @@ def test_typed_refusal_and_programming_answer(settings):
         app = make_app(settings, [{"text": ["A closure captures variables from its enclosing scope."]}])
         provider = app.pool.providers["freellm"]
         await app.start()
+        app.settings.conversation.scope = "engineering_only"
         refused = await collect_replies(app, lambda: app.conversation.handle_text("tell me a joke"))
+        app.settings.conversation.scope = "universal"
         scripted_before = len(provider.turns)
         answer = await collect_replies(app, lambda: app.conversation.handle_text("What is a closure in Python?"))
         history = app.memory.recent_turns(app.conversation.conversation_id)

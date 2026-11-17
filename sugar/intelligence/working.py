@@ -47,6 +47,7 @@ class WorkingMemory:
     last_files: list[str] = field(default_factory=list)
     topic: str | None = None
     previous_project: dict[str, Any] | None = None  # last session's project — never treated as active
+    roleplay: dict[str, Any] | None = None  # {"id", "premise", "started"} while a roleplay is running
     _path: Path | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ persistence

@@ -41,6 +41,7 @@ def build_provider_pool(settings: Settings, bus: EventBus) -> ProviderPool:
             llm.ollama.chat_model,
             keep_alive=llm.ollama.keep_alive,
             timeout_s=llm.ollama.timeout_s,
+            supports_tools=llm.ollama.supports_tools,
         )
 
     if llm.claude.enabled:

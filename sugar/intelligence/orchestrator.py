@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,9 +33,11 @@ from sugar.core.metrics import TurnTrace
 from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.domain import REFUSAL
 from sugar.intelligence.fastpath import Intent
+from sugar.intelligence.health import emergency_message
 from sugar.intelligence.router import Route, RouteDecision, Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.providers.pool import AllProvidersFailed, ProviderPool
+from sugar.security.provenance import user_origin
 from sugar.tools.registry import ToolResult
 
 log = logging.getLogger(__name__)
@@ -93,6 +96,7 @@ class TurnSummary:
     tools: list[str] = field(default_factory=list)
     ok: bool = True
     category: str | None = None
+    context: str | None = None  # context layer the turn belongs to (e.g. "roleplay:1a2b3c4d")
 
 
 @dataclass
@@ -114,6 +118,8 @@ def is_destructive_request(text: str) -> bool:
 
 def _command_call(intent: Intent) -> tuple[str, dict[str, Any]] | None:
     """Engineering fast-path intent → (tool, arguments)."""
+    if intent.call is not None:  # self-commands (voice, personality, roleplay…) carry their tool call
+        return intent.call[0], dict(intent.call[1])
     simple = {"project.list": "project.list", "claude.status": "claude.status", "claude.pause": "claude.pause",
               "claude.resume": "claude.resume", "claude.stop": "claude.stop", "git.diff": "git.diff",
               "memory.recall": "memory.recall"}
@@ -230,7 +236,8 @@ class Orchestrator:
         log_event("ROUTE_SELECTED", route=decision.route.value, reason=decision.reason, intent=intent_name,
                   category=decision.category)
         self._bus.publish("route.selected", route=decision.route.value, reason=decision.reason, intent=intent_name,
-                          category=decision.category)
+                          category=decision.category, mode=decision.mode, chain=decision.chain,
+                          local_only=decision.local_only)
         self._working.last_user_text = text
 
         if decision.route == Route.REJECTED:
@@ -243,6 +250,8 @@ class Orchestrator:
             return await self._engineering(text, decision, out)
         if decision.route == Route.CODING_QA:
             return await self._answer(text, decision, out)
+        if decision.route == Route.ANSWER:
+            return await self._general(text, decision, out)
         if decision.route == Route.DESKTOP:
             if decision.intent is not None:
                 return await self._desktop(decision.intent, out)
@@ -477,9 +486,70 @@ class Orchestrator:
             on_tool_result=on_tool,
             trace=out.trace,
             max_steps=10,
+            user_origin=user_origin(getattr(out, "source", "text")),
         )
 
     # ------------------------------------------------------------------ programming questions
+
+    async def _general(self, text: str, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
+        """Any non-engineering request: a model chosen for the category, with the category's tools only."""
+        universal = decision.universal
+        category = decision.category
+        if universal is not None and universal.flags.get("emergency"):
+            message = emergency_message(text) or ""
+            log_event("HEALTH_EMERGENCY", category=category)
+            out.say(message)
+            return TurnSummary("answer", category=category)
+        if decision.local_only and not decision.chain:
+            out.say("That includes your personal health information, and no local model is running, so I'd have "
+                    "to send it to an online model. Say \"allow online health answers\" if that's okay, or ask it "
+                    "without the personal details.")
+            return TurnSummary("answer", ok=False, category=category)
+        context_tag = None
+        instructions = decision.instructions
+        if category == "roleplay":
+            roleplay = self._working.roleplay
+            if roleplay is None:
+                roleplay = {"id": uuid.uuid4().hex[:8], "premise": text[:500], "started": time.time()}
+                self._working.roleplay = roleplay
+                self._bus.publish("roleplay.started", id=roleplay["id"])
+            context_tag = f"roleplay:{roleplay['id']}"
+            instructions += f"\nThe roleplay's premise, as the user set it up: {roleplay['premise']}"
+        if decision.local_only:
+            instructions += ("\nThe user's personal health information stays on this computer: you are a local "
+                             "model. Be especially careful about what you are unsure of.")
+        messages = self._context.build(text, instructions=instructions or None, context_tag=context_tag)
+        tools_used: list[str] = []
+
+        def on_tool(record: ToolRecord) -> None:
+            tools_used.append(record.name)
+            if record.result.display and category != "research":
+                out.show(record.result.display)
+
+        try:
+            result = await self._agent.run(
+                messages,
+                chain=decision.chain or self._settings.llm.chat_chain,
+                tool_groups=decision.tool_groups,
+                tool_names=decision.tool_names,
+                purpose=decision.purpose,
+                on_text=out.stream,
+                on_tool_result=on_tool,
+                trace=out.trace,
+                max_steps=max(1, decision.max_steps),
+                model_for=self._model_overrides(decision),
+                user_origin=user_origin(getattr(out, "source", "text")),
+            )
+        except AllProvidersFailed as exc:
+            log.warning("all providers failed: %s", exc)
+            out.say(self._offline_message())
+            self._bus.publish("error", source="llm", message=str(exc))
+            return TurnSummary("answer", ok=False, category=category, context=context_tag)
+        if not result.text.strip() and tools_used:
+            out.say("Done.")
+        out.trace.info.update({"provider": result.provider, "model": result.model, "steps": result.steps})
+        return TurnSummary("answer", result.provider, result.model, tools_used, category=category,
+                           context=context_tag)
 
     async def _answer(self, text: str, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
         chain = decision.chain or self._settings.llm.chat_chain
@@ -520,6 +590,9 @@ class Orchestrator:
     def _offline_message(self) -> str:
         status = self._pool.status()
         down = [name for name, info in status.items() if not info["available"] or info["last_error"]]
+        if self._pool.connectivity() == "offline":
+            return ("No language model is reachable right now: the online models and the local fallback are all "
+                    "down. Commands, desktop control and Claude Code still work.")
         if "ollama" in down and "freellm" in down:
             return ("My language models are unreachable. FreeLLMAPI and Ollama are both down. "
                     "Claude Code tasks and project commands still work.")
