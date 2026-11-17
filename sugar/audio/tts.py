@@ -224,6 +224,74 @@ class SapiEngine:
                 pass
 
 
+# Pause after a chunk, by how the chunk ends: what a speaker would leave between those words.
+PAUSE_AFTER_S = {"sentence": 0.16, "clause": 0.07, "none": 0.03}
+
+
+def trim_silence(audio: np.ndarray, rate: int, threshold_db: float = -42.0, margin_s: float = 0.012) -> np.ndarray:
+    """Cut the leading and trailing silence each MeloTTS call adds (the "robotic gaps" between chunks)."""
+    if audio.size == 0:
+        return audio
+    frame = max(1, int(rate * 0.01))
+    usable = audio[: audio.size - audio.size % frame] if audio.size >= frame else audio
+    if usable.size < frame:
+        return audio
+    rms = np.sqrt(np.mean(usable.reshape(-1, frame).astype(np.float64) ** 2, axis=1))
+    peak = float(rms.max()) or 1.0
+    loud = np.nonzero(20 * np.log10(np.maximum(rms, 1e-9) / peak) > threshold_db)[0]
+    if loud.size == 0:
+        return audio
+    margin = int(rate * margin_s)
+    start = max(0, loud[0] * frame - margin)
+    end = min(audio.size, (loud[-1] + 1) * frame + margin)
+    return audio[start:end]
+
+
+def tighten_pauses(audio: np.ndarray, rate: int, longest_s: float = 0.17, threshold_db: float = -42.0) -> np.ndarray:
+    """Shorten MeloTTS's long internal pauses (at full stops it often leaves ~0.3 s) to ``longest_s``."""
+    frame = int(rate * 0.01)
+    if audio.size < frame * 4:
+        return audio
+    n = audio.size // frame
+    rms = np.sqrt(np.mean(audio[: n * frame].reshape(n, frame).astype(np.float64) ** 2, axis=1))
+    quiet = 20 * np.log10(np.maximum(rms, 1e-9) / (float(rms.max()) or 1.0)) < threshold_db
+    keep_frames = int(longest_s / 0.01)
+    keep = np.ones(audio.size, dtype=bool)
+    run_start = None
+    for i in range(n + 1):
+        if i < n and quiet[i]:
+            if run_start is None:
+                run_start = i
+            continue
+        if run_start is not None and i - run_start > keep_frames:
+            # keep the edges of the pause, drop its middle
+            cut_from = (run_start + keep_frames // 2) * frame
+            cut_to = (i - keep_frames // 2) * frame
+            keep[cut_from:cut_to] = False
+        run_start = None
+    return audio[keep]
+
+
+def join_smoothly(audio: np.ndarray, text: str, rate: int) -> np.ndarray:
+    """Trim a chunk's own silence, fade its edges and end it with a natural pause for its punctuation.
+
+    Chunks are played back to back, so this sets the rhythm between them: a breath after a sentence, a
+    short catch after a comma, and nothing that sounds like the voice stalled.
+    """
+    if audio.size == 0:
+        return audio
+    clip = tighten_pauses(trim_silence(audio, rate).astype(np.float32, copy=True), rate)
+    fade = min(clip.size // 4, int(rate * 0.006))
+    if fade > 1:
+        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        clip[:fade] *= ramp
+        clip[-fade:] *= ramp[::-1]
+    ending = text.rstrip()[-1:] if text.strip() else ""
+    kind = "sentence" if ending in ".!?" else "clause" if ending in ",;:-" else "none"
+    pause = np.zeros(int(rate * PAUSE_AFTER_S[kind]), dtype=np.float32)
+    return np.concatenate([clip, pause])
+
+
 class Synthesizer:
     """Fallback chain + phrase cache. Always returns float32 mono at ``OUTPUT_RATE``."""
 
@@ -264,7 +332,7 @@ class Synthesizer:
                 if cached is not None:
                     self._cache.move_to_end(key)
                     return cached
-        audio = self._synthesize_with_fallback(text)
+        audio = join_smoothly(self._synthesize_with_fallback(text), text, self.output_rate)
         if len(text) <= self.CACHE_MAX_CHARS and audio.size:
             with self._cache_lock:
                 self._cache[key] = audio

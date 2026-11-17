@@ -153,7 +153,7 @@ def test_routes(settings):
     assert r.route("show my projects").route == Route.COMMAND
     assert r.route("What is Claude doing?").route == Route.COMMAND
     assert r.route("How do you make butter chicken?").route == Route.REJECTED
-    assert r.route("Find the files in my downloads folder and rename them").route == Route.REJECTED
+    assert r.route("Find the files in my downloads folder and rename them").route == Route.DESKTOP
     assert r.route("Compare REST and GraphQL in detail with pros and cons").route == Route.CODING_QA
     assert r.route("Compare REST and GraphQL in detail with pros and cons").purpose == "reasoning"
 
@@ -161,9 +161,42 @@ def test_routes(settings):
 @pytest.mark.parametrize("text", ["open chrome", "Play Master of Puppets by Metallica.", "Volume 50", "What time is it?",
                                   "What's the weather like today?", "Take a screenshot.", "Open YouTube.",
                                   "Type this: hello world", "What's 25 times 4?", "Remember that I prefer tea."])
-def test_desktop_and_general_commands_are_rejected(settings, text):
-    """The grammar still recognises these, but SID never executes them."""
+def test_desktop_commands_are_rejected_when_desktop_control_is_off(settings, text):
+    settings.conversation.desktop_control = False
     assert router(settings).route(text).route == Route.REJECTED
+
+
+@pytest.mark.parametrize("text", ["open chrome", "Play Master of Puppets by Metallica.", "Volume 50", "What time is it?",
+                                  "Take a screenshot.", "Open YouTube.", "Type this: hello world"])
+def test_desktop_commands_run_directly_when_desktop_control_is_on(settings, text):
+    decision = router(settings).route(text)
+    assert decision.route == Route.DESKTOP and decision.intent is not None
+
+
+@pytest.mark.parametrize(("text", "platform", "query"), [
+    ("type lofi beats in youtube", "youtube", "lofi beats"),
+    ("search spotify for daft punk", "spotify", "daft punk"),
+    ("Search YouTube for RTX 5050 benchmarks", "youtube", "rtx 5050 benchmarks"),
+    ("spotify search interstellar soundtrack", "spotify", "interstellar soundtrack"),
+    ("type blinding lights into spotify", "spotify", "blinding lights"),
+])
+def test_youtube_and_spotify_searches(settings, text, platform, query):
+    decision = router(settings).route(text)
+    assert decision.route == Route.DESKTOP
+    assert decision.intent.call == ("media.search", {"platform": platform, "query": query})
+
+
+def test_free_form_computer_operations_go_to_the_agent_with_computer_tools(settings):
+    for text in ("open a new notepad and start writing a fibonacci function", "close the tab with the error",
+                 "move the files in my downloads folder into a new folder", "turn on bluetooth"):
+        decision = router(settings).route(text)
+        assert decision.route == Route.DESKTOP and decision.intent is None and "computer" in decision.tool_groups, text
+
+
+def test_small_talk_is_still_refused_with_desktop_control(settings):
+    r = router(settings)
+    for text in ("Tell me a joke about Java", "How do you make butter chicken?", "Recommend a movie"):
+        assert r.route(text).route == Route.REJECTED, text
 
 
 def test_programming_questions_get_no_tools(settings):
@@ -204,3 +237,9 @@ def test_status_questions_go_to_the_workbench(settings):
     for text in ("Are you done?", "status", "what's the status"):
         decision = r.route(text)
         assert decision.route == Route.COMMAND and decision.intent.name == "claude.status", text
+
+
+@pytest.mark.parametrize("text", ["check how much free space is left on my D drive", "what's my battery level",
+                                  "list the processes using the most memory", "kill discord"])
+def test_system_questions_go_to_the_agent(settings, text):
+    assert router(settings).route(text).route == Route.DESKTOP, text

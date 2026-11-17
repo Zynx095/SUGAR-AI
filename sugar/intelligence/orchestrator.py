@@ -47,6 +47,12 @@ QA_INSTRUCTIONS = """This is a programming question. Answer it directly from you
 - If the question depends on code you have not been shown, say what you need to see instead of guessing.
 - You have no tools in this turn and you cannot change files; never claim to have run, edited or tested anything."""
 
+DESKTOP_INSTRUCTIONS = """This request operates the user's Windows PC. You control it through your tools: apps, windows,
+keyboard and mouse, the browser (on the user's own screen), YouTube and Spotify (media.search types a search
+into YouTube or Spotify; media.play finds and plays), files, the clipboard, screenshots and PowerShell
+(terminal.run). Use as few tool calls as possible, check results, and report what actually happened.
+Risky actions are confirmed with the user by the system; don't ask again yourself. Never invent links."""
+
 _NEW_PROJECT = re.compile(
     r"\b(?:create|build|make|scaffold|start|set ?up|bootstrap|initiali[sz]e|generate|develop)\b.*\b"
     r"(?:new )?(?:app|application|website|site|web ?app|project|api|service|cli|game|bot|tool|dashboard|"
@@ -128,6 +134,61 @@ def _command_call(intent: Intent) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+# Desktop/media grammar intent → (tool, arguments). Engineering intents use _command_call.
+def _desktop_call(intent: Intent, services_state: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    if intent.call is not None:
+        return intent.call[0], dict(intent.call[1])
+    slots = intent.slots
+    simple = {
+        "system.time": "system.time", "system.date": "system.date", "browser.open": "browser.open",
+        "media.pause": "media.pause", "media.resume": "media.resume", "media.next": "media.next",
+        "media.previous": "media.previous", "media.current": "media.now_playing", "screen.capture": "screen.capture",
+        "clipboard.read": "clipboard.read", "memory.recall": "memory.recall", "project.list": "project.list",
+        "claude.status": "claude.status", "claude.pause": "claude.pause", "claude.resume": "claude.resume",
+        "claude.stop": "claude.stop", "git.diff": "git.diff",
+    }
+    name = intent.name
+    if name in simple:
+        return simple[name], {}
+    if name == "weather.current":
+        return "weather.current", ({"location": slots["location"]} if slots.get("location") else {})
+    if name == "app.open":  # the spoken name, so a substitution ("Chrome isn't installed…") can be explained
+        return "app.open", {"name": slots.get("name") or slots["app"].name}
+    if name == "app.close":
+        return "app.close", {"name": slots.get("name") or slots["app"].name}
+    if name == "browser.site":
+        return "browser.open_url", {"url": slots["url"]}
+    if name == "web.search":
+        return "browser.search", {"query": slots["query"], "engine": "google"}
+    if name == "media.play":
+        return "media.play", {"query": slots["query"]}
+    if name == "volume.set":
+        return "volume.set", {"level": slots["level"]}
+    if name == "volume.up":
+        return "volume.change", {"delta": 10}
+    if name == "volume.down":
+        return "volume.change", {"delta": -10}
+    if name == "volume.mute":
+        return "volume.mute", {"muted": True}
+    if name == "volume.unmute":
+        return "volume.mute", {"muted": False}
+    if name == "type.text":
+        return "keyboard.type", {"text": slots["text"]}
+    if name == "clipboard.copy_last":
+        return "clipboard.write", {"text": services_state.get("last_reply", "")}
+    if name == "memory.remember":
+        return "memory.remember", {"fact": slots["fact"]}
+    if name == "memory.forget":
+        return "memory.forget", {"fact": slots["fact"]}
+    if name == "project.open":
+        if slots.get("project") is not None:
+            return "project.open", {"name": slots["project"].name}
+        if slots.get("spoken_path"):
+            return "project.open", {"path": slots["spoken_path"]}
+        return "project.open", {"name": slots.get("name", "")}
+    return None
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -182,6 +243,10 @@ class Orchestrator:
             return await self._engineering(text, decision, out)
         if decision.route == Route.CODING_QA:
             return await self._answer(text, decision, out)
+        if decision.route == Route.DESKTOP:
+            if decision.intent is not None:
+                return await self._desktop(decision.intent, out)
+            return await self._operate(text, decision, out)
         # CONTROL is handled by the conversation layer; reaching here means it was submitted directly.
         out.say(REFUSAL)
         return TurnSummary(decision.route.value, ok=False)
@@ -325,6 +390,94 @@ class Orchestrator:
             return TurnSummary("command", tools=["project.open"], ok=False)
         log_event("PENDING_RESUMED", project=project.name)
         return await self._engineering(pending.text, RouteDecision(pending.route, "resumed after project choice"), out)
+
+    # ------------------------------------------------------------------ desktop control
+
+    async def _desktop(self, intent: Intent, out: TurnOutput) -> TurnSummary:
+        """A desktop/media command the grammar fully understood: run it directly, no model."""
+        if intent.name == "calc.evaluate":
+            from sugar.tools.calculator import format_number
+
+            out.say(f"That's {format_number(intent.slots['value'])}.")
+            return TurnSummary("desktop", tools=["calc"])
+        if intent.name == "sequence":
+            return await self._sequence(intent.slots["steps"], out)
+        call = _desktop_call(intent, self._state)
+        if call is None:
+            return await self._operate(intent.text, RouteDecision(Route.DESKTOP, "grammar fallback",
+                                                                chain=self._settings.llm.chat_chain,
+                                                                tool_groups={"agent", "chat", "computer"},
+                                                                purpose="agent"), out)
+        name, args = call
+        if name == "keyboard.type":
+            out.ack("Typing.")
+        return await self._run_tool(out, name, args, "desktop")
+
+    async def _sequence(self, steps: list[Intent], out: TurnOutput) -> TurnSummary:
+        """Compound commands ("open Notepad and type hello"): run each step, stop at the first failure."""
+        tools: list[str] = []
+        spoke = False
+        out.trace.mark("tool_start")
+        for step in steps:
+            call = _desktop_call(step, self._state)
+            if call is None:
+                out.say("I can't do part of that.")
+                return TurnSummary("desktop", tools=tools, ok=False)
+            name, args = call
+            if name == "keyboard.type":
+                out.ack("Typing.")
+            result: ToolResult = await self._executor.execute(name, args, origin="user")
+            tools.append(name)
+            if result.display:
+                out.show(result.display)
+            if not result.ok:
+                out.say(result.summary)
+                out.trace.mark("tool_done")
+                return TurnSummary("desktop", tools=tools, ok=False)
+            if result.speak:
+                out.say(result.summary)
+                spoke = True
+            if isinstance(result.data, dict) and result.data.get("waiting_for"):
+                break  # an app asked a question ("save changes?"); let the user answer first
+        out.trace.mark("tool_done")
+        if not spoke:
+            out.say("Done.")
+        return TurnSummary("desktop", tools=tools)
+
+    async def _operate(self, text: str, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
+        """Free-form computer operation: a model with the full computer toolset (permission-checked)."""
+        messages = self._context.build(text, instructions=DESKTOP_INSTRUCTIONS)
+        tools_used: list[str] = []
+
+        def on_tool(record: ToolRecord) -> None:
+            tools_used.append(record.name)
+            if record.result.display:
+                out.show(record.result.display)
+
+        try:
+            result = await self._agent_loop_run(messages, decision, out, on_tool)
+        except AllProvidersFailed as exc:
+            log.warning("all providers failed: %s", exc)
+            out.say(self._offline_message())
+            self._bus.publish("error", source="llm", message=str(exc))
+            return TurnSummary("desktop", ok=False)
+        if not result.text.strip() and tools_used:
+            out.say("Done.")
+        out.trace.info.update({"provider": result.provider, "model": result.model, "steps": result.steps})
+        return TurnSummary("desktop", result.provider, result.model, tools_used)
+
+    async def _agent_loop_run(self, messages, decision: RouteDecision, out: TurnOutput, on_tool):
+        return await self._agent.run(
+            messages,
+            chain=decision.chain or self._settings.llm.chat_chain,
+            tool_groups=decision.tool_groups or {"agent", "chat", "computer"},
+            tool_names=None,
+            purpose="agent",
+            on_text=out.stream,
+            on_tool_result=on_tool,
+            trace=out.trace,
+            max_steps=10,
+        )
 
     # ------------------------------------------------------------------ programming questions
 

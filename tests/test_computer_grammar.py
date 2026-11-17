@@ -164,8 +164,8 @@ def test_undo_goes_to_coding_after_coding_work():
 
 # ---------------------------------------------------------------------------------------- routing
 
-def test_computer_requests_never_route_to_desktop_tools(settings):
-    """SID keeps the grammar module but its router never executes desktop commands."""
+def test_computer_requests_never_route_to_desktop_tools_when_desktop_control_is_off(settings):
+    settings.conversation.desktop_control = False
     router = Router(settings, grammar(), WorkingMemory())
     for text in ("Open a new notepad and start writing a Fibonacci code using recursive function.",
                  "write directly into the notepad", "close the tab with the error", "summarize this page",
@@ -178,8 +178,9 @@ def test_computer_requests_never_route_to_desktop_tools(settings):
 
 # ---------------------------------------------------------------------------------------- end to end
 
-def test_desktop_commands_are_refused_through_the_whole_app(settings, monkeypatch):
+def test_desktop_commands_are_refused_when_desktop_control_is_off(settings, monkeypatch):
     """Text → router → refusal: the desktop backend sees no launch, keystroke or close."""
+    settings.conversation.desktop_control = False
     import sugar.computer.engine as engine
     from sugar.app.application import SIDApp
     from sugar.intelligence.domain import REFUSAL
@@ -242,3 +243,51 @@ def test_stop_with_nothing_to_stop_leaves_the_music_alone(settings, monkeypatch)
 
     run(scenario())
     assert desktop.media_log == []
+
+
+def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
+    """Desktop control on: voice text → grammar sequence → executor → computer control → the fake desktop."""
+    import sugar.computer.engine as engine
+    from sugar.app.application import SIDApp
+
+    desktop = FakeDesktop()
+    desktop.add(browser_window())
+    desktop.launchers["shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"] = (
+        lambda: FakeWindow("Untitled - Notepad", "notepad.exe", 300, class_name="Notepad"))
+    monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
+    settings.ui.enabled = False
+    settings.computer.backend = "auto"
+    settings.computer.typing_interval_ms = 0
+    settings.computer.key_gap_ms = 0
+
+    async def scenario():
+        app = SIDApp(settings, voice=False)
+        app.audio_output = False
+        app.apps.loaded_at = 9e12
+        from sugar.computer.apps import AppEntry
+
+        app.apps.add(AppEntry("Notepad", "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "aumid", ["notepad.exe"]))
+        await app.start()
+        replies = []
+        done = asyncio.Event()
+
+        def on_message(event):
+            replies.append(event.data)
+            done.set()
+
+        app.bus.subscribe("assistant.message", on_message)
+        texts = {}
+        for utterance in ("Open Notepad and type: Hello, this is SID.", "close this", "don't save"):
+            done.clear()
+            await app.conversation.handle_text(utterance)
+            await asyncio.wait_for(done.wait(), 15)
+            notepads = [w for w in desktop.windows.values() if w.process == "notepad.exe"]
+            texts[utterance] = notepads[0].text if notepads else None
+        await app.shutdown()
+        return replies, texts
+
+    replies, texts = run(scenario())
+    assert replies[0]["route"] == "desktop" and "Notepad's open." in replies[0]["text"]
+    assert texts["Open Notepad and type: Hello, this is SID."] == "Hello, this is SID."
+    assert "unsaved changes" in replies[1]["text"]
+    assert texts["don't save"] is None and "Closed Notepad" in replies[2]["text"]

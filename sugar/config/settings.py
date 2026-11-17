@@ -137,6 +137,8 @@ class ConversationSettings(BaseModel):
     wake_words: list[str] = Field(default_factory=lambda: ["sid", "syd", "sidd", "sydd", "cid"])
     wake_words_after_hey: list[str] = Field(default_factory=lambda: ["side", "said", "seed", "sit", "sed", "cyd", "sith"])
     engagement: Literal["wake_word", "always"] = "wake_word"
+    # Operate the PC (apps, windows, browser, YouTube/Spotify, files, terminal) as well as engineering work.
+    desktop_control: bool = True
     engagement_timeout_s: float = 45.0
     history_turns: int = 12
     context_chars: int = 12000
@@ -175,9 +177,7 @@ class CodingSettings(BaseModel):
 
 
 class ComputerSettings(BaseModel):
-    # SID is an engineering assistant: desktop/media control is off and no route reaches it. "auto" only
-    # re-enables the legacy backend's window tracking; requests still can't trigger desktop tools.
-    backend: Literal["auto", "none"] = "none"
+    backend: Literal["auto", "none"] = "auto"  # "none" disables desktop control (tests, headless runs)
     typing_mode: Literal["auto", "realtime", "paste"] = "auto"  # auto: real-time, paste for long text/code
     typing_interval_ms: float = 6.0  # pause between characters when typing in real time
     key_gap_ms: float = 4.0  # pause between individual key events (apps must see each modifier state)

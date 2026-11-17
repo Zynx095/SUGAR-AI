@@ -11,7 +11,7 @@ from conftest import run
 
 from sugar.audio.playback import AudioPlayer
 from sugar.audio.speech import SpeechOutput
-from sugar.audio.tts import OUTPUT_RATE, Synthesizer
+from sugar.audio.tts import OUTPUT_RATE, PAUSE_AFTER_S, Synthesizer, join_smoothly, trim_silence
 from sugar.config.settings import TTSSettings
 
 MODEL_TESTS = os.environ.get("SUGAR_MODEL_TESTS") == "1"
@@ -40,7 +40,8 @@ def test_synthesizer_falls_back_when_primary_fails():
     synth.load()
     audio = synth.synthesize("Hello there.")
     assert synth.engine_name == "sapi"
-    assert audio.size == pytest.approx(OUTPUT_RATE * 0.1, rel=0.02)  # resampled to the output rate
+    # resampled to the output rate, plus the natural pause after a sentence
+    assert audio.size == pytest.approx(OUTPUT_RATE * (0.1 + PAUSE_AFTER_S["sentence"]), rel=0.03)
 
 
 def test_short_phrases_are_cached():
@@ -225,3 +226,16 @@ def test_sid_voice_is_cloned_from_the_reference():
     f0, _, _ = librosa.pyin(librosa.resample(audio, orig_sr=engine.sample_rate, target_sr=16000), fmin=45, fmax=400,
                             sr=16000)
     assert 70 <= float(np.nanmedian(f0)) <= 95
+
+
+def test_chunks_lose_their_padding_and_get_a_natural_pause():
+    rate = 44100
+    speech = (0.4 * np.sin(np.linspace(0, 2 * np.pi * 220, rate // 2))).astype(np.float32)
+    padded = np.concatenate([np.zeros(rate // 3, np.float32), speech, np.zeros(rate // 3, np.float32)])
+    trimmed = trim_silence(padded, rate)
+    assert trimmed.size < speech.size + rate * 0.05  # ~0.67 s of padding removed
+    sentence = join_smoothly(padded, "That is done.", rate)
+    clause = join_smoothly(padded, "First,", rate)
+    assert sentence.size - clause.size == pytest.approx(rate * (PAUSE_AFTER_S["sentence"] - PAUSE_AFTER_S["clause"]),
+                                                        abs=2)
+    assert abs(float(sentence[0])) < 1e-3  # faded in: no click at the seam

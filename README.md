@@ -35,6 +35,17 @@ mic → Silero VAD → echo guard → endpointer ─┐
   request." Refused requests never reach a model, a tool or Claude Code. Voice and typing share the same
   classifier, so typing can't get around it.
 
+### Desktop control
+
+`conversation.desktop_control` (on by default) lets SID operate the PC as well: apps and windows, typing
+and shortcuts, the browser on your screen, **YouTube and Spotify search** ("type lofi beats in YouTube",
+"search Spotify for Daft Punk" opens the Spotify app on its search page), playback, files, the clipboard,
+screenshots and PowerShell. Commands the grammar understands run directly; anything else goes to the
+agent model with the full computer toolset. Small talk and general-knowledge questions are still refused.
+`permissions.auto_approve_level: 2` lets sensitive actions (PowerShell commands, installs, force-closing
+apps) run without asking; destructive actions (deleting files, wiping data) are always confirmed first.
+File and terminal access is limited to `permissions.allowed_roots`.
+
 ### The engineering boundary
 
 `sugar/intelligence/domain.py` classifies intent, not keywords:

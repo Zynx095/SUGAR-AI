@@ -206,7 +206,7 @@ class SpeechChunker:
         self,
         *,
         first_min_chars: int = 2,
-        min_chars: int = 40,
+        min_chars: int = 110,  # several sentences per synthesis call: fewer seams, continuous prosody
         max_chars: int = 240,
         max_spoken_chars: int | None = 900,
     ) -> None:

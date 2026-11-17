@@ -179,6 +179,8 @@ NON_ENGINEERING = ["What's the weather in Python?", "Tell me a joke about Java",
 
 
 def test_non_engineering_requests_reach_no_model_no_tool_and_no_claude_code(settings, tmp_path):
+    settings.conversation.desktop_control = False  # the strict engineering-only mode
+
     async def scenario():
         app, provider, started, tools = make_app(settings, tmp_path)
         app.working.set_project("shop", str(project_dir(tmp_path, "shop")))  # even with a project active
@@ -375,3 +377,35 @@ def test_typed_target_paths_stop_at_the_clause_boundary(text, path):
 
     found = extract_target_path(text)
     assert (str(found) if found else None) == (str(Path(path)) if path else None)
+
+
+def test_with_desktop_control_small_talk_is_still_refused_and_never_reaches_claude_code(settings, tmp_path):
+    async def scenario():
+        app, provider, started, tools = make_app(settings, tmp_path)
+        await app.start()
+        replies = [await say(app, text) for text in ("Tell me a joke about Java", "Recommend a movie",
+                                                     "How are you?", "Who won the match yesterday?")]
+        await app.shutdown()
+        return replies, provider, started
+
+    replies, provider, started = run(scenario())
+    assert all(r["text"] == REFUSAL for r in replies)
+    assert provider.calls == [] and started == []
+
+
+def test_spotify_search_opens_the_app_search_page(settings, tmp_path, monkeypatch):
+    import os
+
+    opened = []
+    monkeypatch.setattr(os, "startfile", lambda target: opened.append(target), raising=False)
+
+    async def scenario():
+        app, _, _, tools = make_app(settings, tmp_path)
+        await app.start()
+        reply = await say(app, "search spotify for daft punk")
+        await app.shutdown()
+        return reply, tools
+
+    reply, tools = run(scenario())
+    assert opened == ["spotify:search:daft%20punk"] and tools == ["media.search"]
+    assert reply["route"] == "desktop" and "Searching Spotify for daft punk" in reply["text"]
