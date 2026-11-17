@@ -1,26 +1,30 @@
-"""Request routing — decided locally in microseconds (no router LLM call).
+"""Request routing — SID's engineering boundary, decided locally (no router LLM call).
 
-    CONTROL    stop / wait / sleep / repeat …               → handled by the conversation layer
-    COMMAND    deterministic fast-path intent               → tool, no model
-    CODING     repository work on a project                 → Claude Code
-    AGENT      multi-step computer operation                → tool-calling model (agent toolset)
-    REASONING  explicitly deep / long analysis              → Claude, then FreeLLMAPI
-    CHAT       everything else                              → FreeLLMAPI (light toolset), Ollama offline
+    CONTROL           stop / wait / sleep / repeat …              → conversation layer
+    COMMAND           engineering command (project, Claude Code)  → tool, no model
+    CODING_QA         programming question                        → coding model, no tools
+    PROJECT_ANALYSIS  inspect a repository                        → Claude Code, read-only (plan mode)
+    BUILD_EXECUTION   change a repository                         → Claude Code
+    CLARIFY           engineering, but too ambiguous to execute   → SID asks what is meant
+    REJECTED          not software engineering                    → fixed refusal: no model, no tools
 
-The old design paid for an extra Ollama round-trip on every request just to
-pick a model. Here the cheap, unambiguous signals are used directly, and
-ambiguous requests go to CHAT, whose model can still escalate by calling
-tools (including ``claude.task``).
+Typed and spoken requests take the same path. The deterministic grammar
+(:mod:`fastpath`) still recognises desktop commands ("open Chrome", "play…"),
+but only engineering commands are executed from it; every other match is
+classified like free text, so a desktop or media command can never run.
 """
 
 from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from sugar.config.settings import Settings
+from sugar.intelligence.domain import Classification, EngineeringIntent, RequestContext, classify
 from sugar.intelligence.fastpath import FastPath, Intent, normalize
 from sugar.intelligence.working import WorkingMemory
 
@@ -28,10 +32,14 @@ from sugar.intelligence.working import WorkingMemory
 class Route(StrEnum):
     CONTROL = "control"
     COMMAND = "command"
-    CODING = "coding"
-    AGENT = "agent"
-    REASONING = "reasoning"
-    CHAT = "chat"
+    CODING_QA = "coding_qa"
+    PROJECT_ANALYSIS = "project_analysis"
+    BUILD_EXECUTION = "build_execution"
+    CLARIFY = "clarify"
+    REJECTED = "rejected"
+
+
+EXECUTION_ROUTES = frozenset({Route.PROJECT_ANALYSIS, Route.BUILD_EXECUTION})
 
 
 @dataclass
@@ -40,104 +48,125 @@ class RouteDecision:
     reason: str
     intent: Intent | None = None
     chain: list[str] | None = None
-    tool_groups: set[str] | None = None
-    tool_names: set[str] | None = None  # further restricts the groups (small prompt = faster first token)
+    tool_groups: set[str] | None = None  # None/empty: the model gets no tools at all
+    tool_names: set[str] | None = None
     purpose: str = "chat"
+    classification: Classification | None = None
+    project: Any | None = None  # a project the request itself names ("…in Jiva")
+
+    @property
+    def category(self) -> str | None:
+        return self.classification.intent.value if self.classification else None
 
 
-# Conversation gets a deliberately small toolset: every schema costs prompt tokens and latency, and the
-# obvious commands (pause, volume, next track…) never reach a model anyway. Requests that operate the
-# computer route to AGENT, which carries the full computer toolset.
-CHAT_TOOLS = {
-    "weather.current", "web.lookup", "browser.search", "app.open", "app.close", "keyboard.type", "media.play",
-    "media.pause", "media.now_playing", "memory.remember", "memory.recall", "calc.evaluate", "claude.task",
-    "claude.status", "project.open",
-}
-COMPUTER_GROUPS = {"agent", "chat", "computer"}
+# Fast-path intents SID executes directly. Everything else the grammar knows (apps, media, browser,
+# volume, clock, typing…) belongs to the old general assistant and is never run.
+ENGINEERING_COMMANDS = frozenset({
+    "claude.status", "claude.pause", "claude.resume", "claude.stop", "claude.connect", "coding.no_commit",
+    "git.diff", "project.list", "project.open",
+})
+MEMORY_COMMANDS = frozenset({"memory.remember", "memory.forget", "memory.recall"})
 
-
-_CODING_WORK = re.compile(
-    r"\b(?:fix(?:es|ed)?|debug|implement|refactor|build|compile|deploy|lint|test(?:s|ing)?|commit|merge|rebase|"
-    r"analy[sz]e|review|investigate|add (?:a |an )?(?:feature|endpoint|page|component|test|button|route|api)|"
-    r"write (?:a |the )?(?:test|function|component|endpoint|migration)|run (?:it|the (?:tests?|app|server|build|project))|"
-    r"make the (?:ui|page|app|design|frontend|backend|layout|animation)|clean(?:er)? up|optimi[sz]e|"
-    r"what(?:'s| is) (?:broken|wrong|failing)|why (?:is|did|does) (?:it|the|this|that) (?:\w+ )?(?:fail|crash|break)|"
-    r"broken|failing|crash(?:es|ing)?|bug|error|stack ?trace|exception|undo (?:that|it|the changes?)|revert)\b"
+_STATUS = re.compile(
+    r"^(?:are you (?:done|finished)(?: yet)?|is it (?:done|finished|ready)(?: yet)?|(?:what's|what is) the status|"
+    r"status(?: update| report)?|how(?:'s| is) (?:it|the task|the build|the work) going|where are we|"
+    r"how far along are you|what are you (?:doing|working on)|progress(?: report)?|any progress)$"
 )
-_REPO_REFERENCE = re.compile(
-    r"\b(?:the|this|my|our) (?:project|repo|repository|code|codebase|app|application|frontend|backend|ui|tests?|"
-    r"build|server|api|bug|error|issue|branch|changes|websocket|auth(?:entication)?|database|component|page|"
-    r"hero section|animation|layout|function|file)\b|"
-    r"\b(?:fix (?:it|that|this|them|all|both)|do it|run it|ship it|build it|test it|fix that too|go ahead|"
-    r"commit (?:it|that|them|the changes|everything))\b"
-)
-_AGENT = re.compile(
-    r"\b(?:files?|folders?|directory|directories|terminal|command line|powershell|cmd|screenshot|clipboard|desktop|"
-    r"downloads folder|documents folder|rename|move (?:the|my|this|that)|delete|copy (?:the|my|this|that) file|"
-    r"install|uninstall|run (?:the )?command|and then|then open|after that|on my screen|what's on (?:my|the) screen)\b"
-)
-# Imperatives that operate the computer even when the fast path can't parse the details
-# ("open a new notepad and start writing a Fibonacci function", "close the tab with the error").
-_COMPUTER_VERB = re.compile(
-    r"^(?:open|close|quit|exit|kill|launch|type|press|hit|click|double.click|right.click|scroll|switch|"
-    r"minimi[sz]e|maximi[sz]e|restore|focus|reload|refresh|paste|undo|redo|snap|resize|navigate|play|pause|"
-    r"resume|skip|save|bring up|bring back|go to|search (?:youtube|google|github|for)|watch)\b"
-)
-_COMPUTER_WEAK_VERB = re.compile(r"^(?:write|read|summari[sz]e|find|look up|show me|take|start|put|move|select|copy|"
-                                 r"delete|erase|clear|pull up|put on)\b")
-_COMPUTER_NOUN = re.compile(
-    r"\b(?:notepad|tab|tabs|window|windows|browser|chrome|brave|edge|firefox|youtube|spotify|screen|desktop|"
-    r"clipboard|keyboard|mouse|cursor|vs code|explorer|this page|the page|website|web page|video|app|"
-    r"application|word document|text box|search bar|address bar)\b"
-)
-_REASONING = re.compile(
+_DEEP = re.compile(
     r"\b(?:think (?:hard|carefully|deeply|it through)|in detail|step by step|deep dive|pros and cons|trade-?offs?|"
-    r"architecture|design (?:a|an|the)|compare|comparison|analy[sz]e|research|plan (?:out|for)|strategy|"
-    r"explain (?:how|why) .{20,}|evaluate|critique|prove|derivation)\b"
+    r"compare|comparison|design (?:a|an|the)|architecture|evaluate|critique|prove|derivation)\b"
+)
+_NAMED_PROJECT = re.compile(
+    r"\b(?:in|on|for|inside|within|to) (?:the |my |our )?(?P<name>[\w][\w .\-]{1,40}?)"
+    r"(?: project| repo| repository| codebase| app)?(?:[.?!]|$)"
 )
 
 
 class Router:
     def __init__(self, settings: Settings, fastpath: FastPath, working: WorkingMemory,
-                 coding_active: callable = lambda: False) -> None:
+                 coding_active: Callable[[], bool] = lambda: False) -> None:
         self._settings = settings
         self._fastpath = fastpath
         self._working = working
         self._coding_active = coding_active
 
+    # ------------------------------------------------------------------ context
+
     def _recent_coding(self, within_s: float = 900) -> bool:
         action = self._working.last_action
         return bool(action and action.domain == "coding" and time.time() - action.ts < within_s)
+
+    def named_project(self, text: str) -> Any | None:
+        """A known project the sentence names ("fix the login bug in Jiva"), or None."""
+        resolve = self._fastpath.resolve_project
+        if resolve is None:
+            return None
+        plain = normalize(text)
+        for match in _NAMED_PROJECT.finditer(plain):
+            name = match.group("name").strip()
+            if name in {"it", "this", "that", "here", "there", "python", "react", "javascript", "typescript"}:
+                continue
+            try:
+                project = resolve(name)
+            except Exception:
+                project = None
+            if project is not None:
+                return project
+        return None
+
+    def project_reply(self, text: str) -> Any | None:
+        """The user answering "which project?" with just a name ("Jiva", "the portfolio one")."""
+        resolve = self._fastpath.resolve_project
+        if resolve is None:
+            return None
+        plain = normalize(text)
+        if len(plain.split()) > 6:
+            return None
+        plain = re.sub(r"^(?:in |use |it's |its |it is |the one called |try )", "", plain)
+        try:
+            return resolve(plain)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------ routing
 
     def route(self, text: str) -> RouteDecision:
         intent = self._fastpath.match(text)
         if intent is not None:
             if intent.domain == "control":
-                return RouteDecision(Route.CONTROL, "fast-path control", intent)
-            return RouteDecision(Route.COMMAND, f"fast-path {intent.name}", intent)
-
-        lowered = text.lower()
-        chat_chain = self._settings.llm.chat_chain
-        has_project = self._working.active_project is not None
-        coding_context = has_project or self._coding_active() or self._recent_coding()
-
-        if coding_context and _CODING_WORK.search(lowered) and (
-            _REPO_REFERENCE.search(lowered) or self._recent_coding() or len(lowered.split()) <= 8
-        ):
-            return RouteDecision(Route.CODING, "coding request with a project in context")
-        if coding_context and _REPO_REFERENCE.search(lowered) and self._recent_coding():
-            return RouteDecision(Route.CODING, "follow-up to coding work")
+                return RouteDecision(Route.CONTROL, "conversation control", intent)
+            if intent.name in ENGINEERING_COMMANDS:
+                return RouteDecision(Route.COMMAND, f"engineering command {intent.name}", intent)
+            if intent.name in MEMORY_COMMANDS:
+                subject = str(intent.slots.get("fact") or "")
+                if intent.name == "memory.recall" or classify(subject).is_engineering:
+                    return RouteDecision(Route.COMMAND, f"engineering memory {intent.name}", intent)
+            # Any other grammar match (apps, media, browser, clock…) is classified as plain text below.
 
         plain = normalize(text)
-        if (_COMPUTER_VERB.search(plain) or (_COMPUTER_WEAK_VERB.search(plain) and _COMPUTER_NOUN.search(plain))
-                or _AGENT.search(lowered)):
-            return RouteDecision(Route.AGENT, "computer operation", chain=chat_chain,
-                                 tool_groups=COMPUTER_GROUPS, purpose="agent")
+        if _STATUS.match(plain):
+            return RouteDecision(Route.COMMAND, "status question", Intent("claude.status", {}, plain))
 
-        words = len(lowered.split())
-        if _REASONING.search(lowered) or words >= 35:
-            return RouteDecision(Route.REASONING, "explicitly deep or long request",
-                                 chain=self._settings.llm.reasoning_chain, tool_groups=None, purpose="reasoning")
+        project = self.named_project(text)
+        context = RequestContext(
+            has_project=self._working.active_project is not None,
+            recent_coding=self._recent_coding() or self._coding_active(),
+            project_named=project is not None,
+        )
+        classification = classify(text, context)
+        category = classification.intent
 
-        return RouteDecision(Route.CHAT, "conversation", chain=chat_chain, tool_groups={"agent", "chat"},
-                             tool_names=CHAT_TOOLS, purpose="chat")
+        if category == EngineeringIntent.NON_ENGINEERING:
+            return RouteDecision(Route.REJECTED, classification.reason, classification=classification)
+        if classification.ambiguous:
+            return RouteDecision(Route.CLARIFY, classification.reason, classification=classification,
+                                 project=project)
+        if category == EngineeringIntent.CODING_QA:
+            deep = bool(_DEEP.search(plain)) or len(plain.split()) >= 35
+            llm = self._settings.llm
+            return RouteDecision(Route.CODING_QA, classification.reason,
+                                 chain=llm.reasoning_chain if deep else llm.chat_chain,
+                                 tool_groups=None, purpose="reasoning" if deep else "chat",
+                                 classification=classification)
+        route = Route.PROJECT_ANALYSIS if category == EngineeringIntent.PROJECT_ANALYSIS else Route.BUILD_EXECUTION
+        return RouteDecision(route, classification.reason, classification=classification, project=project)

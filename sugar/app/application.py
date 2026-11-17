@@ -2,8 +2,11 @@
 
 Start-up is progressive: the UI and the text path are available within a
 second, while Whisper and MeloTTS load in background threads (the UI shows
-each component's status). If a component fails, Sugar keeps running without
+each component's status). If a component fails, SID keeps running without
 it and says so — no silent failure, no crash.
+
+SID starts with no active project, whatever was active last time: the user
+selects one (or names one in a request) before Claude Code touches a repository.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from typing import Any
 from sugar.agent.executor import ToolExecutor
 from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
+from sugar.audio.voice_profile import PROFILES as VOICE_PROFILES
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
 from sugar.computer import ComputerControl
@@ -42,16 +46,17 @@ from sugar.tools.services import ToolServices
 
 log = logging.getLogger(__name__)
 
-PREWARM_PHRASES = ["Yeah?", "Done.", "Stopped.", "Standing by.", "On it.", "Typing.", "Let me think about that.",
-                   "Okay, I won't.", "Mic's off.", "Got it, I'll remember that."]
+PREWARM_PHRASES = ["Yes?", "Done.", "Stopped.", "Standing by.", "Acknowledged.", "Understood. I won't.",
+                   "Microphone off.", "Ready. Name the engineering task.",
+                   "I'm designed for software engineering and development. I can't assist with that request."]
 LIVE_SETTINGS = {
     "tts.speed", "tts.voice", "tts.volume", "vad.threshold", "vad.endpoint_default_ms", "vad.endpoint_complete_ms",
     "vad.endpoint_incomplete_ms", "conversation.engagement", "conversation.engagement_timeout_s",
-    "permissions.auto_approve_level", "ui.developer_mode", "stt.partials",
+    "permissions.auto_approve_level", "ui.developer_mode", "stt.partials", "tts.voice_profile",
 }
 
 
-class SugarApp:
+class SIDApp:
     def __init__(self, settings: Settings, *, voice: bool = True) -> None:
         self.settings = settings
         self.voice_enabled = voice
@@ -112,7 +117,6 @@ class SugarApp:
             self.permissions, self.memory, self.working, self.sessions, self.shared_state,
             stt=self.stt, pipeline=self.pipeline,
         )
-        self.conversation.on_idle_stop = self._stop_media
         self.components: dict[str, dict[str, Any]] = {}
         self.ui = None
         self.ui_ready = threading.Event()  # set once the UI server is listening (window can open)
@@ -148,11 +152,11 @@ class SugarApp:
         )
 
     def _extra_context(self) -> str:
-        parts = [self.sessions.describe_for_context(), self.computer.describe()]
-        return "\n".join(p for p in parts if p)
+        active = self.working.active_project
+        return self.sessions.describe_for_context(active["path"] if active else None)
 
     async def _stop_media(self) -> str | None:
-        """"Stop" with nothing of Sugar's to stop: pause what's playing, if anything is."""
+        """Legacy media hook (not wired in SID): pause what's playing, if anything is."""
         if not self.computer.available:
             return None
         sessions = await self.computer.media.sessions()
@@ -320,6 +324,8 @@ class SugarApp:
                                                                          "permissions", "stt"}),
             "history": turns,
             "project": self.working.active_project,
+            "previous_project": self.working.previous_project,
+            "assistant": self.settings.conversation.assistant_name,
             "projects": [p.to_dict() for p in self.projects.all()[:30]],
             "sessions": [s.to_dict() for s in self.sessions.all()],
             "providers": self.pool.status(),
@@ -328,7 +334,9 @@ class SugarApp:
             "voices": getattr(self.synth._active, "voices", []) if self.synth._active else [],
             "mic_paused": bool(self.pipeline and self.pipeline.paused),
             "pending_permission": self.permissions.pending.to_dict() if self.permissions.pending else None,
-            "desktop": self.computer.context.snapshot() if self.computer.available else None,
+            "pending_task": (self.orchestrator.pending.text if self.orchestrator.pending
+                             and self.orchestrator.pending.fresh else None),
+            "voice_profiles": list(VOICE_PROFILES),
         }
 
     async def handle_command(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -363,6 +371,10 @@ class SugarApp:
             deleted = self.memory.delete(int(message.get("id", -1)))
             self.bus.publish("memory.changed", action="delete", id=message.get("id"))
             return {"ok": deleted}
+        if cmd == "project.clear":
+            self.working.clear_project()
+            self.bus.publish("project.active", name=None, path=None, stack=[])
+            return {"ok": True}
         if cmd == "new_conversation":
             self.conversation.new_conversation()
             return {"ok": True}
@@ -407,3 +419,6 @@ class SugarApp:
             self.pipeline.endpointer.config = endpoint_config_from(self.settings)
         self.bus.publish("settings.changed", key=key, value=coerced)
         return {"ok": True, "value": coerced}
+
+
+SugarApp = SIDApp  # legacy name kept for scripts and tests written against Sugar

@@ -43,7 +43,7 @@ def test_corrupt_override_file_is_ignored(tmp_path: Path):
     data_dir.mkdir()
     (data_dir / "overrides.json").write_text("{not json", encoding="utf-8")
     s = load_settings(config_file=tmp_path / "none.yaml", use_env=False, data_dir=data_dir)
-    assert s.tts.speed == 1.1
+    assert s.tts.speed == 0.97  # the default survives a corrupt override file
 
 
 def test_save_override_round_trip(settings):

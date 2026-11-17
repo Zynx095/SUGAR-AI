@@ -278,3 +278,39 @@ def _search_below(root: Path, tail_words: list[str], max_depth: int = 3) -> Path
             if depth + 1 < max_depth and not child.startswith("."):
                 frontier.append((path, depth + 1))
     return best[1] if best else None
+
+
+# --------------------------------------------------------------------------- typed target directories
+
+_TYPED_PATH = re.compile(
+    r"(?:^|\s)(?:in|at|into|under|inside|to)\s+[\"'`]?(?P<path>[A-Za-z]:[\\/][^\"'`\n]*?)[\"'`]?"
+    r"(?=\s+(?:with|using|and|that|which|for|so)\b|[.,;!?]?\s*$)",
+    re.IGNORECASE,
+)
+
+
+def extract_target_path(text: str) -> Path | None:
+    """A Windows directory typed into a request ("create a React app in D:\\College\\shop")."""
+    match = _TYPED_PATH.search(text)
+    if not match:
+        return None
+    raw = match.group("path").strip().rstrip(".,;!? ")
+    if not raw or len(raw) < 3:
+        return None
+    return Path(raw)
+
+
+def path_allowed(path: Path, roots: list[Path]) -> bool:
+    """Whether SID may create or work in ``path`` (inside one of the configured roots)."""
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        return False
+    for root in roots:
+        try:
+            base = Path(root).resolve(strict=False)
+        except OSError:
+            continue
+        if resolved == base or base in resolved.parents:
+            return True
+    return False

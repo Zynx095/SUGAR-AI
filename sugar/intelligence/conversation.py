@@ -41,6 +41,7 @@ from sugar.core.events import Event, EventBus
 from sugar.core.logging import log_event
 from sugar.core.metrics import MetricsRecorder, TurnTrace
 from sugar.core.state import AssistantState, StateMachine
+from sugar.intelligence.domain import redact_secrets
 from sugar.intelligence.fastpath import FastPath, Intent, normalize
 from sugar.intelligence.orchestrator import Orchestrator
 from sugar.intelligence.response import SpeechChunker
@@ -60,7 +61,7 @@ NO = {"no", "nope", "nah", "don't", "do not", "cancel", "stop", "never mind", "n
 
 def parse_yes_no(text: str) -> bool | None:
     phrase = normalize(text)
-    phrase = re.sub(r"^(?:sugar|hey sugar)\s+", "", phrase)
+    phrase = re.sub(r"^(?:hey sid|sid)\s+", "", phrase)
     if phrase in YES:
         return True
     if phrase in NO:
@@ -73,29 +74,49 @@ def parse_yes_no(text: str) -> bool | None:
     return None
 
 
-def split_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str]:
-    """Detect and remove the wake word at the start (or end) of an utterance."""
-    tokens = text.strip().split()
+_HEY = {"hey", "hi", "ok", "okay", "yo"}
+_SPELLED = re.compile(r"\b([sS])[\s.\-]+([iI])[\s.\-]+([dD])\b\.?")
+
+
+def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tuple[str, ...] = ()) -> tuple[bool, str]:
+    """Detect and remove the wake word ("Hey SID", "SID, …", "…, SID") from an utterance.
+
+    ``wake_words`` count anywhere a wake word can sit (start, after a filler, or last). ``after_hey`` are
+    spellings that are also ordinary English words ("side", "said"); they only count straight after "hey",
+    so "put it on the left side" never wakes SID. Short names are matched exactly (a fuzzy match on a
+    three-letter word would fire on half the dictionary).
+    """
+    text = _SPELLED.sub("SID", text.strip())
+    tokens = text.split()
     if not tokens:
         return False, ""
 
+    def clean(token: str) -> str:
+        return re.sub(r"[^a-z]", "", token.lower())
+
     def is_wake(token: str) -> bool:
-        word = re.sub(r"[^a-z]", "", token.lower())
+        word = clean(token)
         if not word:
             return False
         if word in wake_words:
             return True
-        return len(word) >= 4 and max(difflib.SequenceMatcher(None, word, w).ratio() for w in wake_words) >= 0.8
+        long_words = [w for w in wake_words if len(w) >= 4]
+        return len(word) >= 5 and bool(long_words) and max(
+            difflib.SequenceMatcher(None, word, w).ratio() for w in long_words) >= 0.8
 
     for index in range(min(3, len(tokens))):
-        if is_wake(tokens[index]):
-            prefix = [re.sub(r"[^a-z]", "", t.lower()) for t in tokens[:index]]
+        prefix = [clean(t) for t in tokens[:index]]
+        hey_before = bool(prefix) and prefix[-1] in _HEY
+        if is_wake(tokens[index]) or (hey_before and clean(tokens[index]) in after_hey):
             if all(p in {"hey", "hi", "ok", "okay", "yo", "oh", "so", "", "um", "uh"} for p in prefix):
                 remainder = " ".join(tokens[index + 1:]).lstrip(" ,.!?:;-")
                 return True, remainder
-    if is_wake(tokens[-1]):
+    # A trailing name must be set off by punctuation ("run the tests, SID"), so "his name is Sid" stays asleep.
+    if len(tokens) > 1 and is_wake(tokens[-1]) and tokens[-2][-1:] in {",", ".", "!", "?", ";", ":", "-"}:
         return True, " ".join(tokens[:-1]).rstrip(" ,.!?:;-")
-    return False, text.strip()
+    if len(tokens) == 1 and is_wake(tokens[0]):
+        return True, ""
+    return False, text
 
 
 @dataclass
@@ -137,6 +158,7 @@ class ActiveTurn:
     def stream(self, delta: str) -> None:
         if self.cancelled or not delta:
             return
+        delta = redact_secrets(delta)
         self.display.append(delta)
         self.manager._bus.publish("assistant.delta", turn_id=self.id, text=delta)
         for chunk in self.chunker.feed(delta):
@@ -153,7 +175,7 @@ class ActiveTurn:
     def show(self, markdown: str) -> None:
         if self.cancelled or not markdown:
             return
-        block = "\n\n" + markdown.strip() + "\n\n"
+        block = "\n\n" + redact_secrets(markdown.strip()) + "\n\n"
         self.display.append(block)
         self.manager._bus.publish("assistant.delta", turn_id=self.id, text=block, display_only=True)
 
@@ -176,7 +198,7 @@ class ActiveTurn:
 
     @property
     def display_text(self) -> str:
-        return "".join(self.display).strip()
+        return redact_secrets("".join(self.display).strip())
 
 
 class ConversationManager:
@@ -212,7 +234,7 @@ class ConversationManager:
         self._stt = stt
         self._pipeline = pipeline
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sugar-stt")
+        self._stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sid-stt")
         self._stt_jobs = 0
         self._utterances: dict[int, UtteranceState] = {}
         self._turn: ActiveTurn | None = None
@@ -223,7 +245,8 @@ class ConversationManager:
         self._transcribing = 0
         self.conversation_id = self._pick_conversation()
         permissions.on_request = self._ask_permission
-        # "stop" when Sugar is idle: the app pauses whatever media is playing (returns what to say, or None).
+        # Optional hook for "stop" when SID is idle (returns what to say, or None). SID leaves it unset:
+        # media control is outside its engineering scope.
         self.on_idle_stop: Callable[[], Awaitable[str | None]] | None = None
         sessions.on_announce = self.announce
         bus.subscribe("speech.*", self._on_speech_event)
@@ -290,7 +313,7 @@ class ConversationManager:
             if heard:
                 self._last_reply_spoken = heard
             if self._turn is None:
-                self.engage()  # keep the conversation open after Sugar finishes talking
+                self.engage()  # keep the conversation open after SID finishes talking
         if event.type == "speech.segment":
             self._recent_speech.append(event.data.get("text", ""))
         self._settle_state(event.type)
@@ -387,7 +410,8 @@ class ConversationManager:
         if state.ended or state.resumed:
             return
         state.pause_text = quick.text
-        wake, remainder = split_wake_word(quick.text, self._settings.conversation.wake_words)
+        wake, remainder = split_wake_word(quick.text, self._settings.conversation.wake_words,
+                                          self._settings.conversation.wake_words_after_hey)
         addressed = state.engaged or wake
         if quick.text and quick.rejected is None and addressed:
             self._bus.publish("stt.partial", utterance=state.id, text=quick.text)
@@ -448,14 +472,15 @@ class ConversationManager:
             self._bus.publish("stt.echo", text=text)
             self._settle_state("echo")
             return
-        wake, remainder = split_wake_word(text, self._settings.conversation.wake_words)
+        wake, remainder = split_wake_word(text, self._settings.conversation.wake_words,
+                                          self._settings.conversation.wake_words_after_hey)
         if not wake and not self.is_engaged() and not state.engaged:
             self._bus.publish("stt.ignored", text=text)
             self._settle_state("not addressed")
             return
         self.engage()
         if not remainder.strip():
-            await self.quick_reply("Yeah?")
+            await self.quick_reply("Yes?")
             return
         await self.submit(remainder, source="voice", trace=state.trace)
 
@@ -527,7 +552,7 @@ class ConversationManager:
             if decision is not None:
                 self._permissions.resolve(decision, pending.id)
                 if not decision:
-                    self._speech_now("Okay, I won't.")
+                    self._speech_now("Understood. I won't.")
                 return
             self._permissions.resolve(False, pending.id)
         waiting = [s for s in self._sessions.all()
@@ -554,11 +579,11 @@ class ConversationManager:
                 self._cancel_turn(turn, "user said " + name.split(".")[1])
             self._permissions.cancel_pending()
             if name == "control.wait":
-                await self.quick_reply("Yeah?")
+                await self.quick_reply("Yes?")
             elif was_busy:
                 await self.quick_reply("Stopped.")
             elif idle and name == "control.stop" and self.on_idle_stop is not None:
-                # Sugar had nothing to stop, so "stop" means the music or video that's playing.
+                # Nothing of SID's to stop: an embedding app may still give "stop" a meaning.
                 reply = await self.on_idle_stop()
                 if reply:
                     await self.quick_reply(reply)
@@ -573,13 +598,13 @@ class ConversationManager:
             await self.quick_reply("Standing by.")
             self.disengage()
         elif name == "control.privacy":
-            handle = await self._speech.speak("Mic's off.", wait=False)
+            handle = await self._speech.speak("Microphone off.", wait=False)
             await handle.done.wait()
             if self._pipeline is not None:
                 self._pipeline.pause()
             self._settle_state("privacy")
         elif name == "control.repeat":
-            await self.quick_reply(self._last_reply_spoken or "I haven't said anything yet.")
+            await self.quick_reply(self._last_reply_spoken or "Nothing to repeat yet.")
         trace.info["route"] = "control"
         self._metrics.finish(trace)
 
@@ -638,7 +663,7 @@ class ConversationManager:
         except Exception as exc:
             log.exception("turn failed")
             self._bus.publish("error", source="turn", message=str(exc))
-            turn.say("Something went wrong on my end. Check the developer panel for details.")
+            turn.say("That request failed internally. The details are in the developer panel.")
             turn.finish()
         finally:
             heard = turn.handle.spoken_text
@@ -673,7 +698,7 @@ class ConversationManager:
     # ------------------------------------------------------------------ permissions & announcements
 
     async def _ask_permission(self, request: PermissionRequest) -> None:
-        question = f"I need your OK to {request.action}. Should I go ahead?"
+        question = f"This needs your confirmation: {request.action}. Proceed?"
         turn = self._turn
         if turn is not None and not turn.cancelled:
             turn.say(question)

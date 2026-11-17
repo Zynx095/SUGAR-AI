@@ -58,8 +58,10 @@ def test_working_memory_options_and_persistence(tmp_path):
     assert working.resolve_option("the last one") == "Portfolio"
     working.record_action("coding", "ran tests", ok=False, error="2 tests failed")
     reloaded = WorkingMemory.load(path)
-    assert reloaded.active_project == {"name": "Jiva", "path": "D:/Jiva"}
-    assert reloaded.last_error == "2 tests failed"
+    # A restart never presents the previous session's project (or its errors) as current.
+    assert reloaded.active_project is None and reloaded.last_error is None
+    assert reloaded.previous_project == {"name": "Jiva", "path": "D:/Jiva"}
+    assert "Active project" not in reloaded.describe()
     assert "Active project: Jiva" in working.describe()
 
 

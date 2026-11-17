@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from sugar.intelligence.fastpath import FastPath, normalize
-from sugar.intelligence.router import CHAT_TOOLS, Route, Router
+from sugar.intelligence.router import Route, Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.tools.calculator import evaluate_spoken_math
 
@@ -150,33 +150,57 @@ def router(settings, working=None, coding=False) -> Router:
 def test_routes(settings):
     r = router(settings)
     assert r.route("stop").route == Route.CONTROL
-    assert r.route("open chrome").route == Route.COMMAND
-    assert r.route("How do you make butter chicken?").route == Route.CHAT
-    assert r.route("Find the files in my downloads folder and rename them").route == Route.AGENT
-    assert r.route("Compare REST and GraphQL in detail with pros and cons").route == Route.REASONING
+    assert r.route("show my projects").route == Route.COMMAND
+    assert r.route("What is Claude doing?").route == Route.COMMAND
+    assert r.route("How do you make butter chicken?").route == Route.REJECTED
+    assert r.route("Find the files in my downloads folder and rename them").route == Route.REJECTED
+    assert r.route("Compare REST and GraphQL in detail with pros and cons").route == Route.CODING_QA
+    assert r.route("Compare REST and GraphQL in detail with pros and cons").purpose == "reasoning"
 
 
-def test_chat_uses_a_small_toolset(settings):
-    decision = router(settings).route("Tell me a joke")
-    assert decision.tool_names == CHAT_TOOLS and len(CHAT_TOOLS) <= 15
+@pytest.mark.parametrize("text", ["open chrome", "Play Master of Puppets by Metallica.", "Volume 50", "What time is it?",
+                                  "What's the weather like today?", "Take a screenshot.", "Open YouTube.",
+                                  "Type this: hello world", "What's 25 times 4?", "Remember that I prefer tea."])
+def test_desktop_and_general_commands_are_rejected(settings, text):
+    """The grammar still recognises these, but SID never executes them."""
+    assert router(settings).route(text).route == Route.REJECTED
 
 
-def test_coding_requires_project_context(settings):
-    assert router(settings).route("Fix the authentication bug").route != Route.CODING
-    working = WorkingMemory()
-    working.set_project("Jiva", "D:/Jiva")
-    r = router(settings, working)
-    assert r.route("Fix the authentication bug").route == Route.CODING
-    assert r.route("Analyze the project and tell me what is broken").route == Route.CODING
-    assert r.route("Make the UI cleaner").route == Route.CODING
-    assert r.route("What's the capital of France?").route == Route.CHAT
+def test_programming_questions_get_no_tools(settings):
+    decision = router(settings).route("Why does this Python function return None?")
+    assert decision.route == Route.CODING_QA and not decision.tool_groups and not decision.tool_names
 
 
-def test_coding_follow_ups(settings):
+def test_engineering_memory_is_allowed(settings):
+    assert router(settings).route("Remember that this project uses pnpm.").route == Route.COMMAND
+
+
+def test_execution_routes(settings):
+    r = router(settings)
+    assert r.route("Fix the authentication bug").route == Route.BUILD_EXECUTION
+    assert r.route("Create a React application with authentication.").route == Route.BUILD_EXECUTION
+    assert r.route("Analyze the architecture of this project").route == Route.PROJECT_ANALYSIS
+    assert r.route("The build failed.").route == Route.PROJECT_ANALYSIS
+    assert r.route("What's the capital of France?").route == Route.REJECTED
+
+
+def test_named_project_is_attached_to_the_decision(settings):
+    decision = router(settings).route("Fix the login bug in Jiva")
+    assert decision.route == Route.BUILD_EXECUTION and decision.project.name == "Jiva"
+
+
+def test_follow_ups_need_engineering_context(settings):
+    assert router(settings).route("Do it.").route == Route.CLARIFY
     working = WorkingMemory()
     working.set_project("Jiva", "D:/Jiva")
     working.record_action("coding", "asked Claude Code to analyze")
     r = router(settings, working)
-    assert r.route("Fix all three.").route == Route.CODING
-    assert r.route("Do it.").route == Route.CODING
-    assert r.route("Why did that test fail?").route == Route.CODING
+    assert r.route("Fix all three.").route == Route.BUILD_EXECUTION
+    assert r.route("Do it.").route == Route.BUILD_EXECUTION
+
+
+def test_status_questions_go_to_the_workbench(settings):
+    r = router(settings)
+    for text in ("Are you done?", "status", "what's the status"):
+        decision = r.route(text)
+        assert decision.route == Route.COMMAND and decision.intent.name == "claude.status", text

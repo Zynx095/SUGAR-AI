@@ -2,8 +2,11 @@
 
 The model gets a compact description of this state with every request, and
 the deterministic fast path uses it directly ("open the second one",
-"go back", "undo that"). It is persisted to ``data/working.json`` so a restart
-does not forget the active project.
+"go back", "undo that"). It is written to ``data/working.json`` for diagnostics,
+but a restart deliberately does *not* restore the active project, task or last
+error: SID must never present a previous session's repository as current. The
+previous project is kept separately (``previous_project``) and only ever shown
+labelled as such.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ class WorkingMemory:
     last_options: list[str] = field(default_factory=list)
     last_files: list[str] = field(default_factory=list)
     topic: str | None = None
+    previous_project: dict[str, Any] | None = None  # last session's project — never treated as active
     _path: Path | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ persistence
@@ -54,10 +58,9 @@ class WorkingMemory:
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                memory.active_project = data.get("active_project")
-                memory.current_task = data.get("current_task")
-                memory.last_error = data.get("last_error")
-                memory.last_files = data.get("last_files", [])[:10]
+                previous = data.get("active_project") or data.get("previous_project")
+                if isinstance(previous, dict) and previous.get("path"):
+                    memory.previous_project = {"name": previous.get("name"), "path": previous["path"]}
             except (OSError, json.JSONDecodeError):
                 pass
         return memory
@@ -67,6 +70,7 @@ class WorkingMemory:
             return
         data = {
             "active_project": self.active_project,
+            "previous_project": self.previous_project,
             "current_task": self.current_task,
             "last_error": self.last_error,
             "last_files": self.last_files[:10],
@@ -99,7 +103,7 @@ class WorkingMemory:
     # ------------------------------------------------------------------ resolution
 
     def resolve_option(self, text: str) -> str | None:
-        """"the second one" / "number 3" → the option Sugar last listed."""
+        """"the second one" / "number 3" → the option SID last listed."""
         if not self.last_options:
             return None
         lowered = text.lower()
@@ -131,8 +135,15 @@ class WorkingMemory:
             lines.append("Recently touched files: " + ", ".join(self.last_files[:5]))
         if self.last_options:
             numbered = "; ".join(f"{i + 1}) {o}" for i, o in enumerate(self.last_options[:6]))
-            lines.append(f"Options Sugar last listed: {numbered}")
+            lines.append(f"Options SID last listed: {numbered}")
         return "\n".join(lines)
+
+    def clear_project(self) -> None:
+        if self.active_project:
+            self.previous_project = dict(self.active_project)
+        self.active_project = None
+        self.current_task = None
+        self.save()
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

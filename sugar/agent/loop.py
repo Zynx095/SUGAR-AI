@@ -80,6 +80,7 @@ class AgentLoop:
             result.steps = step
             text_parts: list[str] = []
             calls: list[ToolCall] = []
+            ignored_calls = False
             extras: dict[str, Any] = {}
             if trace is not None:
                 trace.mark("llm_start")
@@ -97,6 +98,10 @@ class AgentLoop:
                     text_parts.append(chunk.text)
                     on_text(chunk.text)
                 elif chunk.kind == "tool_calls":
+                    if tools is None:  # no tools were offered: a model can't act by inventing a call
+                        log_event("TOOL_CALL_IGNORED", calls=[c.name for c in chunk.tool_calls])
+                        ignored_calls = True
+                        continue
                     calls.extend(chunk.tool_calls)
                 elif chunk.kind == "meta":
                     result.provider = chunk.data.get("provider", result.provider)
@@ -111,6 +116,10 @@ class AgentLoop:
             self._bus.publish("llm.complete", provider=result.provider, model=result.model, step=step,
                               tool_calls=len(calls), usage=result.usage)
             if not calls:
+                if ignored_calls:  # it tried to act anyway: ask for a plain answer (or summarise at the limit)
+                    transcript.append({"role": "assistant", "content": text})
+                    transcript.append({"role": "user", "content": "No tools are available. Answer in plain text."})
+                    continue
                 break
 
             transcript.append({"role": "assistant", "content": text,
