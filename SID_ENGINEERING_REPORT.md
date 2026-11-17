@@ -1,4 +1,6 @@
 # SID — engineering report
+n> Historical: this report covers the first, coding-only SID (17 Nov 2026). Desktop control, the cloned
+> voice and later fixes are covered in [SID_AUDIT.md](SID_AUDIT.md).
 
 Branch `sid/transform` (from `rework/sugar-v2` at `f44fe80`). Nothing was pushed or merged.
 
