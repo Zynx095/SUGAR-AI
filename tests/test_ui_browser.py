@@ -137,6 +137,13 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
 
         async def on_command(message):
             commands.append(message)
+            if message.get("cmd") == "telemetry.history":
+                return {"ok": True, "history": {
+                    "series": {"llm_ttft_ms": [{"day": "2026-11-16", "p50": 2400, "n": 5},
+                                               {"day": "2026-11-17", "p50": 1900, "n": 8},
+                                               {"day": "2026-11-18", "p50": 2100, "n": 3}]},
+                    "providers": [{"provider": "freellm", "answers": 16, "failures": 1, "ttft_p50": 2000}],
+                    "counts": {}, "errors": [], "measurements": 16, "events": 4, "retention_days": 30}}
             return {"ok": True}
 
         server = UIServer(bus, "127.0.0.1", 0, on_command, snapshot)
@@ -272,6 +279,17 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
                 "window.__sid.entity().paletteProgress >= 1 && window.__sid.entity().palette[0] === '#ffab3d' "
                 "&& window.__sid.entity().palette")
 
+            # telemetry history: the tab asks the core and draws the daily medians
+            await page.eval("document.getElementById('devToggle').click()")
+            await page.eval("document.querySelector('.tab[data-tab=\"history\"]').click()")
+            results["history_points"] = await page.until(
+                "document.querySelectorAll('#histChart circle').length === 3 && "
+                "document.querySelectorAll('#histChart circle').length")
+            results["history_provider"] = await page.eval(
+                "document.querySelector('#histProviders tbody').textContent")
+            await page.screenshot("07-history")
+            await page.eval("document.getElementById('devClose').click()")
+
             # the core going away shows offline
             await server.stop()
             results["offline"] = await page.until("window.__sid.state().state === 'offline' && window.__sid.status()")
@@ -309,4 +327,5 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
     assert results["female"][0] == "#e8114f" and results["female_accent"] == "#e8114f"
     assert results["female_mid"] < 1  # a transition, not a jump
     assert results["sid"][0] == "#ffab3d"
+    assert results["history_points"] == 3 and "freellm" in results["history_provider"]
     assert {"cmd": "text", "text": "What is a closure?"}.items() <= next(c for c in commands if c["cmd"] == "text").items()
