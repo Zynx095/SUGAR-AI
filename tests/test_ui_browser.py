@@ -157,7 +157,7 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
 
             # entity states follow real events
             states = {}
-            for backend, expected in [("listening", "listening"), ("transcribing", "processing"),
+            for backend, expected in [("listening", "listening"), ("transcribing", "listening"),
                                       ("tool_execution", "executing"), ("speaking", "speaking"), ("paused", "muted")]:
                 bus.publish("state.changed", state=backend, previous="idle")
                 states[backend] = await page.until(
@@ -275,7 +275,7 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
     assert results["project"] == "NO ACTIVE PROJECT"
     assert results["bench_idle"]["session"] is None and results["bench_idle"]["mode"] == "rail"
     assert results["states"]["listening"] == "Listening"
-    assert results["states"]["transcribing"] == "Analysing request"
+    assert results["states"]["transcribing"] == "Listening"
     assert results["states"]["tool_execution"] == "Executing task"
     assert results["states"]["speaking"] == "Speaking"
     assert results["states"]["before_model"] == "Analysing request"

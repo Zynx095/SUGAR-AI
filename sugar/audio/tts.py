@@ -131,10 +131,10 @@ class MeloEngine:
                 lang_ids.to(device).unsqueeze(0),
                 bert.to(device).unsqueeze(0),
                 ja_bert.to(device).unsqueeze(0),
-                sdp_ratio=s.sdp_ratio,
-                noise_scale=s.noise_scale,
-                noise_scale_w=s.noise_scale_w,
-                length_scale=length_scale_factor(profile) / max(0.5, s.speed),
+                sdp_ratio=s.sdp_ratio if profile.sdp_ratio is None else profile.sdp_ratio,
+                noise_scale=s.noise_scale if profile.noise_scale is None else profile.noise_scale,
+                noise_scale_w=s.noise_scale_w if profile.noise_scale_w is None else profile.noise_scale_w,
+                length_scale=length_scale_factor(profile) / max(0.5, s.speed * profile.pace),
             )[0][0, 0]
             raw = audio.float().cpu().numpy().astype(np.float32)
         return apply_profile(raw, self.sample_rate, profile)

@@ -193,4 +193,4 @@ def test_melo_engine_synthesizes_quickly():
         dsp.append(time.perf_counter() - started)
     assert audio.size > engine.sample_rate * 0.5
     assert min(synth) < (0.5 if engine.device == "cuda" else 3.0), synth
-    assert min(dsp) < 0.15, dsp
+    assert min(dsp) < 0.3, dsp

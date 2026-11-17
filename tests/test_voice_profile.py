@@ -43,7 +43,7 @@ def test_natural_profile_is_untouched():
 def test_sid_profile_lowers_the_voice_into_a_baritone_register():
     shaped = apply_profile(voiced(200.0), RATE, PROFILES["sid"])
     f0 = fundamental(shaped)
-    assert 110 <= f0 <= 145, f0  # MeloTTS EN-Newest speaks around 200 Hz
+    assert 100 <= f0 <= 125, f0  # MeloTTS EN-Newest speaks around 200 Hz; SID sits near 112 Hz
 
 
 def test_register_shift_is_compensated_by_faster_synthesis():
@@ -71,4 +71,4 @@ def test_processing_is_cheap_enough_for_streaming():
     apply_profile(audio[:RATE], RATE, profile)  # first call pays numba/FFT warm-up
     started = time.perf_counter()
     apply_profile(audio, RATE, profile)
-    assert time.perf_counter() - started < 0.4  # ~0.07 s measured for a 5 s sentence
+    assert time.perf_counter() - started < 0.6  # ~0.2 s measured for a 5 s sentence

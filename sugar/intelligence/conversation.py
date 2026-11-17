@@ -32,7 +32,7 @@ from functools import partial
 from typing import Any
 
 from sugar.agent.permissions import PermissionManager, PermissionRequest
-from sugar.audio.endpointing import COMPLETE, EndpointEvent
+from sugar.audio.endpointing import EndpointEvent
 from sugar.audio.speech import SpeechHandle, SpeechOutput
 from sugar.audio.stt import Evidence, SpeechRecognizer, Transcript
 from sugar.coding.sessions import CodingSessionManager
@@ -74,19 +74,21 @@ def parse_yes_no(text: str) -> bool | None:
     return None
 
 
-_HEY = {"hey", "hi", "ok", "okay", "yo"}
+_HEY = {"hey", "hi", "ok", "okay", "yo", "hay", "high"}
 _SPELLED = re.compile(r"\b([sS])[\s.\-]+([iI])[\s.\-]+([dD])\b\.?")
-# Whisper sometimes fuses the phrase into one word: "Hey Sid," → "Hesed," / "Heysid".
-_FUSED_HEY_SID = re.compile(r"^(?:hey|hay|he|hi)s{1,2}(?:id|ed|yd|it|idd)$")
+# Whisper sometimes fuses the phrase into one word: "Hey Sid," -> "Hesed," / "Heysid" / "Acid" / "Asid".
+_FUSED_HEY_SID = re.compile(r"^(?:(?:hey|hay|he|hi)s{1,2}(?:id|ed|yd|it|idd)|a(?:c|s|ss)id|asyd)$")
+# Two-word forms Whisper produced from a real "Hey SID" on this machine's microphone ("He said.").
+_HEY_FORMS = {"he", "hey", "hi", "hay", "a", "high", "ok", "okay"}
 
 
 def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tuple[str, ...] = ()) -> tuple[bool, str]:
-    """Detect and remove the wake word ("Hey SID", "SID, …", "…, SID") from an utterance.
+    """Detect and remove the wake word ("Hey SID", "SID, ...", "..., hey SID") from an utterance.
 
-    ``wake_words`` count anywhere a wake word can sit (start, after a filler, or last). ``after_hey`` are
-    spellings that are also ordinary English words ("side", "said"); they only count straight after "hey",
-    so "put it on the left side" never wakes SID. Short names are matched exactly (a fuzzy match on a
-    three-letter word would fire on half the dictionary).
+    ``wake_words`` count wherever a wake word can sit (start, after a filler, or last). ``after_hey`` are
+    spellings that are also ordinary English words ("said", "side"); they only count straight after a
+    "hey"-like word ("He said." is how Whisper hears "Hey SID" through this microphone), so "put it on the
+    left side" never wakes SID. Short names are matched exactly.
     """
     text = _SPELLED.sub("SID", text.strip())
     tokens = text.split()
@@ -96,8 +98,9 @@ def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tup
     def clean(token: str) -> str:
         return re.sub(r"[^a-z]", "", token.lower())
 
-    def is_wake(token: str) -> bool:
-        word = clean(token)
+    words = [clean(t) for t in tokens]
+
+    def is_wake(word: str) -> bool:
         if not word:
             return False
         if word in wake_words:
@@ -106,19 +109,24 @@ def split_wake_word(text: str, wake_words: list[str], after_hey: list[str] | tup
         return len(word) >= 5 and bool(long_words) and max(
             difflib.SequenceMatcher(None, word, w).ratio() for w in long_words) >= 0.8
 
-    for index in range(min(3, len(tokens))):
-        prefix = [clean(t) for t in tokens[:index]]
-        hey_before = bool(prefix) and prefix[-1] in _HEY
-        word = clean(tokens[index])
-        if (is_wake(tokens[index]) or (hey_before and word in after_hey)
-                or (index == 0 and _FUSED_HEY_SID.match(word))):
-            if all(p in {"hey", "hi", "ok", "okay", "yo", "oh", "so", "", "um", "uh"} for p in prefix):
+    fillers = {"hey", "hi", "ok", "okay", "yo", "oh", "so", "", "um", "uh", "and", "well"}
+    for index in range(min(4, len(tokens))):
+        prefix = words[:index]
+        word = words[index]
+        hey_before = bool(prefix) and prefix[-1] in _HEY_FORMS
+        if (is_wake(word) or (hey_before and word in after_hey)
+                or (index <= 1 and _FUSED_HEY_SID.match(word))):
+            # "he"/"a" before the name are part of the wake phrase, not real words
+            if all(p in fillers or p in _HEY_FORMS for p in prefix):
                 remainder = " ".join(tokens[index + 1:]).lstrip(" ,.!?:;-")
                 return True, remainder
-    # A trailing name must be set off by punctuation ("run the tests, SID"), so "his name is Sid" stays asleep.
-    if len(tokens) > 1 and is_wake(tokens[-1]) and tokens[-2][-1:] in {",", ".", "!", "?", ";", ":", "-"}:
+    # At the end: "run the tests, SID" / "okay let's try it, hey SID" (Whisper: "...it he said").
+    last = words[-1]
+    if len(tokens) > 1 and is_wake(last) and tokens[-2][-1:] in {",", ".", "!", "?", ";", ":", "-"}:
         return True, " ".join(tokens[:-1]).rstrip(" ,.!?:;-")
-    if len(tokens) == 1 and is_wake(tokens[0]):
+    if len(tokens) > 2 and words[-2] in _HEY_FORMS - {"a", "ok", "okay"} and (is_wake(last) or last in after_hey):
+        return True, " ".join(tokens[:-2]).rstrip(" ,.!?:;-")
+    if len(tokens) == 1 and (is_wake(last) or _FUSED_HEY_SID.match(last)):
         return True, ""
     return False, text
 
@@ -419,10 +427,10 @@ class ConversationManager:
         addressed = state.engaged or wake
         if quick.text and quick.rejected is None and addressed:
             self._bus.publish("stt.partial", utterance=state.id, text=quick.text)
-        if not addressed:
-            completeness = COMPLETE  # background speech: end it quickly and ignore it
-        else:
-            completeness = assess_completeness(remainder if wake else quick.text, self._fastpath.is_command)
+        # Unaddressed speech is NOT cut short any more: the quick pause transcript often misses the wake
+        # phrase (Whisper hears "Hey SID" as "He said" / "acid"), and ending early chopped the user's request.
+        # The final transcript decides whether it was addressed.
+        completeness = assess_completeness(remainder if wake else quick.text, self._fastpath.is_command)
         if self._pipeline is not None:
             self._pipeline.endpointer.set_hint(state.id, completeness)
         if addressed and quick.rejected is None:

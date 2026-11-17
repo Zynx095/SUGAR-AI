@@ -16,21 +16,23 @@
    Amber is reserved for live energy (the entity, running work, the active project); the
    interface itself is graphite and warm-white type, held to hairlines. */
 :root {
-  --void: #030201;        /* the room */
-  --graphite: #100e0b;    /* panels */
-  --graphite-up: #191612; /* raised controls */
-  --seam: #2a251e;        /* hairlines */
-  --bone: #f2e7d5;        /* primary text */
-  --ash: #948a7a;         /* secondary text */
-  --smoke: #5e564b;       /* tertiary text, disabled */
-  --amber: #ffab3d;       /* live energy */
-  --gold: #f6cf7a;        /* highlights */
-  --signal: #ff5a36;      /* faults */
+  /* SID — the Aether: blood-red energy in a clean black void.
+     Red is reserved for live energy (the entity, running work, the active project); the interface itself
+     is black, near-black hairlines and pale type. */
+  --void: #000000;        /* the room: pure black, everywhere */
+  --graphite: #000000;    /* panels are black too; only hairlines separate them */
+  --graphite-up: #0d0607; /* raised controls, barely lifted */
+  --seam: #2a1114;        /* hairlines, a dark-red tinge */
+  --bone: #f1e6e7;        /* primary text */
+  --ash: #9a8586;         /* secondary text */
+  --smoke: #5e4b4d;       /* tertiary text, disabled */
+  --amber: #d40a2a;       /* crimson: live energy (token name kept from v1) */
+  --gold: #ff3d55;        /* ruby highlight */
+  --signal: #ff9a3c;      /* faults: orange reads against the red */
   --verdant: #9fcf8a;     /* passed checks only */
-  --glass: rgba(14, 12, 9, 0.62);
+  --glass: rgba(0, 0, 0, 0.72);
   --font: "Bricolage Grotesque", "Segoe UI Variable Text", system-ui, sans-serif;
   --mono: "JetBrains Mono", Consolas, monospace;
-  /* type scale (classical: 11 12 14 16 18 21 24 36 px) */
   --t-2xs: 0.6875rem;
   --t-xs: 0.75rem;
   --t-s: 0.875rem;
@@ -70,7 +72,7 @@ button, input { font: inherit; color: inherit; }
 
 .topbar {
   display: flex; align-items: center; gap: 20px; padding: 0 14px 0 22px;
-  border-bottom: 1px solid var(--seam); background: rgba(3, 2, 1, 0.7); position: relative; z-index: 5;
+  border-bottom: 1px solid var(--seam); background: #000000; position: relative; z-index: 5;
 }
 .wordmark {
   font-stretch: 75%; font-weight: 300; font-size: var(--t-xl); letter-spacing: 0.42em; line-height: 1;
@@ -86,8 +88,8 @@ button, input { font: inherit; color: inherit; }
 .project-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--smoke); flex: none; }
 .project[data-active="true"] .project-dot { background: var(--amber); }
-.project-dot.live { background: var(--amber); box-shadow: 0 0 0 0 rgba(255, 171, 61, 0.6); animation: beacon 1.6s ease-out infinite; }
-@keyframes beacon { to { box-shadow: 0 0 0 7px rgba(255, 171, 61, 0); } }
+.project-dot.live { background: var(--amber); box-shadow: 0 0 0 0 rgba(212, 10, 42, 0.6); animation: beacon 1.6s ease-out infinite; }
+@keyframes beacon { to { box-shadow: 0 0 0 7px rgba(212, 10, 42, 0); } }
 
 .topbar-end { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .link { display: inline-flex; align-items: center; gap: 8px; font-size: var(--t-xs); color: var(--ash); margin-right: 10px; }
@@ -154,7 +156,7 @@ button, input { font: inherit; color: inherit; }
   background: var(--graphite-up); color: var(--bone); font-size: var(--t-s); cursor: pointer;
 }
 .btn:hover { border-color: var(--ash); }
-.btn-primary { background: var(--amber); border-color: var(--amber); color: #1a1006; font-weight: 600; }
+.btn-primary { background: var(--amber); border-color: var(--amber); color: #fff3f4; font-weight: 600; }
 .btn-primary:hover { background: var(--gold); border-color: var(--gold); }
 
 /* ------------------------------------------------------------------ transcript */
@@ -195,7 +197,7 @@ button, input { font: inherit; color: inherit; }
 .said table { border-collapse: collapse; font-size: var(--t-xs); margin: 0 0 0.6em; }
 .said th, .said td { border-bottom: 1px solid var(--seam); padding: 4px 8px; text-align: left; }
 
-.code-block { margin: 0.5em 0 0.8em; border: 1px solid var(--seam); border-radius: var(--radius-small); background: #0b0907; overflow: hidden; }
+.code-block { margin: 0.5em 0 0.8em; border: 1px solid var(--seam); border-radius: var(--radius-small); background: #050203; overflow: hidden; }
 .code-block figcaption { display: flex; align-items: center; justify-content: space-between; padding: 3px 4px 3px 12px; border-bottom: 1px solid var(--seam); }
 .code-lang { font-size: var(--t-2xs); color: var(--smoke); }
 .code-block .copy, .code-block .expand {
@@ -206,11 +208,11 @@ button, input { font: inherit; color: inherit; }
 .code-block code { background: none; padding: 0; font-size: inherit; }
 .code-block.collapsed pre { max-height: 16.5em; overflow: hidden; mask-image: linear-gradient(to bottom, #000 70%, transparent); }
 .code-block .expand { display: block; width: 100%; border-top: 1px solid var(--seam); border-radius: 0; }
-.tok-k { color: #f0b768; }
-.tok-s { color: #c9d39a; }
-.tok-c { color: #6f665a; font-style: italic; }
-.tok-n { color: #e99a6c; }
-.tok-f { color: #f2e1bf; }
+.tok-k { color: #ff5c70; }
+.tok-s { color: #e8b4b8; }
+.tok-c { color: #6b5456; font-style: italic; }
+.tok-n { color: #ff8f7a; }
+.tok-f { color: #f6dfe1; }
 
 details.output { margin-top: 0.6em; border: 1px solid var(--seam); border-radius: var(--radius-small); }
 details.output summary { cursor: pointer; padding: 6px 10px; font-size: var(--t-xs); color: var(--ash); }
@@ -220,7 +222,7 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
 
 .bench {
   grid-column: 3; position: relative; z-index: 3; min-height: 0; display: flex;
-  border-left: 1px solid var(--seam); background: rgba(8, 7, 5, 0.55); backdrop-filter: blur(16px);
+  border-left: 1px solid var(--seam); background: #000000; backdrop-filter: blur(16px);
 }
 .bench-rail {
   flex: none; width: var(--rail); border: 0; background: transparent; color: var(--ash); cursor: pointer;
@@ -270,7 +272,7 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
 /* ------------------------------------------------------------------ sheets */
 
 .sheet, .dev {
-  position: absolute; z-index: 20; background: rgba(12, 10, 8, 0.94); border: 1px solid var(--seam);
+  position: absolute; z-index: 20; background: rgba(0, 0, 0, 0.96); border: 1px solid var(--seam);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); backdrop-filter: blur(18px);
 }
 .sheet { top: 58px; right: 14px; width: 320px; border-radius: var(--radius); padding: 18px; }
@@ -293,7 +295,7 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
 .dev-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px; font-size: var(--t-xs); }
 .metrics { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 .metrics th { text-align: left; font-weight: 500; color: var(--smoke); padding: 4px 8px; border-bottom: 1px solid var(--seam); }
-.metrics td { padding: 5px 8px; border-bottom: 1px solid #1d1914; white-space: nowrap; }
+.metrics td { padding: 5px 8px; border-bottom: 1px solid #1a0c0e; white-space: nowrap; }
 .metrics td.slow { color: var(--gold); }
 .metrics td.very-slow { color: var(--signal); }
 .bar { display: inline-block; height: 3px; margin-left: 6px; vertical-align: middle; background: var(--seam); border-radius: 2px; }
@@ -334,7 +336,7 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
 .boot-list .error { color: var(--signal); }
 .toast {
   position: absolute; z-index: 40; left: 50%; top: 66px; transform: translateX(-50%); max-width: min(560px, 90vw);
-  padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--seam); background: rgba(18, 15, 11, 0.96);
+  padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--seam); background: rgba(0, 0, 0, 0.96);
   font-size: var(--t-s);
 }
 .toast.fault { border-color: var(--signal); }
@@ -346,7 +348,7 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
   .stage { grid-template-columns: minmax(0, 1fr) var(--rail); grid-template-rows: minmax(0, 1fr) minmax(0, 38%); }
   .app[data-bench="open"] .stage { grid-template-columns: minmax(0, 1fr) var(--rail); }
   .presence { grid-column: 1; grid-row: 1; }
-  .transcript { grid-column: 1; grid-row: 2; border-top: 1px solid var(--seam); background: rgba(3, 2, 1, 0.6); }
+  .transcript { grid-column: 1; grid-row: 2; border-top: 1px solid var(--seam); background: #000000; }
   .bench { grid-column: 2; grid-row: 1 / 3; }
   .app[data-bench="open"] .bench { position: absolute; right: 0; top: 0; bottom: 0; width: var(--bench); }
   .link #linkText { display: none; }

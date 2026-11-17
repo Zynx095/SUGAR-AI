@@ -31,6 +31,12 @@ AFTER_HEY = ["side", "said", "seed", "sit", "sed", "cyd", "sith"]
     ("Hey side, explain recursion", True, "explain recursion"),  # Whisper's usual mishearing, after "hey"
     ("Hesed, run the tests.", True, "run the tests."),  # measured: Whisper large-v3-turbo fused "Hey Sid"
     ("The Hasidic tradition", False, "The Hasidic tradition"),
+    # What Whisper actually produced from the user's "Hey SID" on this machine's microphone (data/logs):
+    ("He said.", True, ""),
+    ("acid", True, ""),
+    ("okay let's try it he said", True, "okay let's try it"),
+    ("He said, what is a closure?", True, "what is a closure?"),
+    ("Tell me a joke about Java", False, "Tell me a joke about Java"),
     ("put it on the left side", False, "put it on the left side"),
     ("I said hello", False, "I said hello"),
     ("His name is Sid", False, "His name is Sid"),

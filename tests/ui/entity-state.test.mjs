@@ -29,7 +29,7 @@ test("offline until connected, offline again when the socket drops", () => {
 
 test("foreground states map from the core state machine", () => {
   const t = online();
-  const cases = { listening: "listening", transcribing: "processing", tool_execution: "executing",
+  const cases = { listening: "listening", transcribing: "listening", tool_execution: "executing",
     speaking: "speaking", paused: "muted", error: "error" };
   for (const [backend, expected] of Object.entries(cases)) {
     t.apply(ev("state.changed", { state: backend }), 0);

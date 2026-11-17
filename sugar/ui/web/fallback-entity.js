@@ -87,10 +87,10 @@ export class FallbackEntity {
     const cx = w / 2 + this.layout.x * this.ratio;
     const cy = h / 2 + this.layout.y * this.ratio;
     const R = (this.layout.zone > 0 ? this.layout.zone * this.ratio : Math.min(w, h)) * 0.1;
-    ctx.fillStyle = "#030201";
+    ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, w, h);
     ctx.globalCompositeOperation = "lighter";
-    const warm = (a) => (p.warn > 0.5 ? `rgba(255, 80, 40, ${a})` : `rgba(255, 171, 61, ${a})`);
+    const warm = (a) => (p.warn > 0.5 ? `rgba(255, 154, 60, ${a})` : `rgba(212, 10, 42, ${a})`);
 
     const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 5);
     glow.addColorStop(0, warm(0.35 * p.dim * (0.6 + p.core * 0.5 + this.level)));
@@ -99,7 +99,7 @@ export class FallbackEntity {
     ctx.fillRect(cx - R * 5, cy - R * 5, R * 10, R * 10);
 
     const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * (1 + this.level * 0.2));
-    core.addColorStop(0, `rgba(255, 246, 225, ${0.95 * p.dim})`);
+    core.addColorStop(0, `rgba(255, 214, 218, ${0.95 * p.dim})`);
     core.addColorStop(0.5, warm(0.9 * p.dim * p.core));
     core.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = core;

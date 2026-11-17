@@ -19,7 +19,7 @@ export const STATES = [
 //   dim        global brightness                flicker   energy fluctuation
 //   react      how strongly audio level drives the core ("mic" | "out" | null)
 export const PRESETS = {
-  idle:        { speed: 0.22, core: 0.82, turbulence: 0.25, inward: 0.0,  structure: 0.35, rings: 0.55, field: 0.5,  streams: 0.3,  pulse: 9,   warn: 0, dim: 1.0,  flicker: 0.0,  react: null },
+  idle:        { speed: 0.22, core: 0.82, turbulence: 0.42, inward: 0.0,  structure: 0.35, rings: 0.55, field: 0.5,  streams: 0.3,  pulse: 9,   warn: 0, dim: 1.0,  flicker: 0.0,  react: null },
   listening:   { speed: 0.34, core: 0.9,  turbulence: 0.5,  inward: 0.0,  structure: 0.3,  rings: 0.65, field: 0.7,  streams: 0.45, pulse: 0,   warn: 0, dim: 1.0,  flicker: 0.0,  react: "mic" },
   processing:  { speed: 0.95, core: 0.95, turbulence: 0.35, inward: 0.6,  structure: 0.45, rings: 0.75, field: 0.75, streams: 0.55, pulse: 0,   warn: 0, dim: 1.0,  flicker: 0.15, react: null },
   thinking:    { speed: 0.6,  core: 1.0,  turbulence: 0.95, inward: 0.25, structure: 0.25, rings: 0.7,  field: 0.85, streams: 0.5,  pulse: 4.5, warn: 0, dim: 1.0,  flicker: 0.55, react: null },
@@ -144,7 +144,9 @@ export function deriveState({ connected, backend, phase, codingProject, errorAct
   if (backend === "paused") return "muted";
   if (backend === "speaking") return "speaking";
   if (backend === "listening") return "listening";
-  if (backend === "transcribing") return "processing";
+  // Transcribing is still part of hearing: most speech near the mic is not addressed to SID. "Analysing
+  // request" appears only once a turn has actually started.
+  if (backend === "transcribing") return phase ? "processing" : "listening";
   if (backend === "tool_execution") return "executing";
   if (backend === "thinking") return phase === "thinking" ? "thinking" : "processing";
   if (codingProject) return "coding";

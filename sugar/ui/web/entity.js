@@ -17,10 +17,11 @@ import { PRESETS, easeParams } from "./entity-state.js";
 import { RenderLoop } from "./render-loop.js";
 
 const TAU = Math.PI * 2;
-const AMBER = new THREE.Color("#ffab3d");
-const GOLD = new THREE.Color("#f6cf7a");
-const EMBER = new THREE.Color("#ff6a12");
-const WARN = new THREE.Color("#ff4524");
+// Aether palette: blood-red energy with ruby highlights in a black void. (Names kept from the amber era.)
+const AMBER = new THREE.Color("#d40a2a"); // crimson: the body of the energy
+const GOLD = new THREE.Color("#ff3d55"); // ruby highlight: packets, hot particles
+const EMBER = new THREE.Color("#6e0011"); // dark red: the depths of the core
+const WARN = new THREE.Color("#ff9a3c"); // faults read as orange against the red
 
 const NOISE = /* glsl */ `
   vec3 hash3(vec3 p) {
@@ -180,7 +181,7 @@ export class Entity {
   _build() {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, alpha: false,
       powerPreference: "high-performance", preserveDrawingBuffer: false });
-    this.renderer.setClearColor(0x030201, 1);
+    this.renderer.setClearColor(0x000000, 1);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
     this.camera.position.set(0, 0, 9.2);
@@ -231,7 +232,7 @@ export class Entity {
         float bands = noise3(vPos * 3.4 + vec3(uTime * 0.35, -uTime * 0.22, uTime * 0.18));
         float veins = smoothstep(0.08, 0.5, abs(noise3(vPos * 6.0 - uTime * 0.5)));
         float flick = 1.0 + uFlicker * 0.25 * sin(uTime * 23.0 + bands * 9.0);
-        vec3 white = vec3(1.0, 0.95, 0.84);
+        vec3 white = vec3(1.0, 0.82, 0.84);
         vec3 col = uEmber * (0.6 + 0.7 * bands) + uGold * pow(facing, 1.5) * (0.45 + 0.6 * veins)
                  + white * pow(facing, 6.0) * 0.75 + uAmber * rim * 0.9;
         col = mix(col, uWarnColor * (0.8 + 0.6 * facing), uWarn * 0.75);
@@ -262,8 +263,8 @@ export class Entity {
         float a = g * ${strength.toFixed(2)} * (0.35 + 0.6 * uCore + 0.8 * uLevel) * breathe * uDim;
         gl_FragColor = vec4(col * a, a);
       }`);
-    const tight = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), glowShader(7.0, 1.55));
-    const wide = new THREE.Mesh(new THREE.PlaneGeometry(10.5, 10.5), glowShader(5.0, 0.5));
+    const tight = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), glowShader(8.0, 1.35));
+    const wide = new THREE.Mesh(new THREE.PlaneGeometry(7.0, 7.0), glowShader(7.0, 0.22)); // kept tight: the void stays black
     tight.renderOrder = 2;
     wide.renderOrder = 1;
     this.group.add(wide, tight);
