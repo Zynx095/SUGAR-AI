@@ -100,7 +100,10 @@ function connect() {
     const payload = JSON.parse(message.data);
     if (payload.type === "snapshot") applySnapshot(payload.data);
     else if (payload.type === "events") payload.events.forEach(handleEvent);
-    else if (payload.type === "reply" && payload.data && payload.data.components) applyRefresh(payload.data);
+    else if (payload.type === "reply" && pendingReplies.has(payload.id)) {
+      pendingReplies.get(payload.id)(payload.data);
+      pendingReplies.delete(payload.id);
+    } else if (payload.type === "reply" && payload.data && payload.data.components) applyRefresh(payload.data);
   });
   socket.addEventListener("close", () => {
     tracker.setConnected(false);
@@ -108,6 +111,18 @@ function connect() {
     renderEntityState();
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 8000);
+  });
+}
+
+const pendingReplies = new Map();
+
+/** Send a command and wait for its reply. */
+function request(cmd, data = {}) {
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return resolve(null);
+    const id = nextId++;
+    pendingReplies.set(id, resolve);
+    socket.send(JSON.stringify({ cmd, id, ...data }));
   });
 }
 
@@ -816,6 +831,87 @@ document.querySelectorAll(".tab").forEach((tab) =>
   })
 );
 
+// ------------------------------------------------------------------ telemetry history
+
+function historyRange() {
+  const from = $("histFrom").value ? new Date($("histFrom").value).getTime() / 1000 : null;
+  const to = $("histTo").value ? new Date($("histTo").value).getTime() / 1000 + 86400 : null;
+  return { since: from, until: to };
+}
+
+async function renderHistory() {
+  const reply = await request("telemetry.history", historyRange());
+  if (!reply || !reply.ok) {
+    $("histNote").textContent = reply ? reply.error : "Not connected.";
+    return;
+  }
+  const history = reply.history;
+  const metric = $("histMetric").value;
+  const series = history.series[metric] || [];
+  const chart = $("histChart");
+  chart.innerHTML = "";
+  if (series.length) {
+    const max = Math.max(...series.map((p) => p.p50)) || 1;
+    const step = series.length > 1 ? 580 / (series.length - 1) : 0;
+    const points = series.map((p, i) => [10 + i * step, 150 - (p.p50 / max) * 130]);
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("points", points.map((xy) => xy.join(",")).join(" "));
+    line.setAttribute("class", "history-line");
+    chart.appendChild(line);
+    points.forEach(([x, y], i) => {
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 3);
+      dot.setAttribute("class", "history-dot");
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${series[i].day}: ${series[i].p50} ms median over ${series[i].n} turns`;
+      dot.appendChild(title);
+      chart.appendChild(dot);
+    });
+  }
+  $("histNote").textContent = series.length
+    ? `${series[0].day} to ${series[series.length - 1].day}: daily median, peak ${Math.max(...series.map((p) => p.p50))} ms. `
+      + `${history.measurements} measurements, ${history.events} events, kept ${history.retention_days} days.`
+    : `No ${metric} measurements in this range yet. History keeps ${history.retention_days} days.`;
+  const body = $("histProviders").querySelector("tbody");
+  body.innerHTML = "";
+  for (const row of history.providers) {
+    const tr = document.createElement("tr");
+    for (const value of [row.provider, row.answers, row.failures, row.ttft_p50 == null ? "—" : `${row.ttft_p50} ms`]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  const errors = $("histErrors");
+  errors.innerHTML = "";
+  for (const e of history.errors.slice(-15).reverse()) {
+    const li = document.createElement("li");
+    li.className = "error";
+    li.innerHTML = `<span class="dot"></span><span class="name"></span><span class="detail"></span>`;
+    li.querySelector(".name").textContent = new Date(e.ts * 1000).toLocaleString();
+    li.querySelector(".detail").textContent = `${e.kind.replace("_", " ")}: ${e.name || ""} ${e.status || ""}`;
+    errors.appendChild(li);
+  }
+}
+
+async function exportHistory(format) {
+  const reply = await request("telemetry.export", { format, ...historyRange() });
+  if (!reply || !reply.ok) return toast(reply ? reply.error : "Not connected.", true);
+  const blob = new Blob([reply.content], { type: format === "csv" ? "text/csv" : "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = reply.filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+$("histRefresh").addEventListener("click", renderHistory);
+$("histMetric").addEventListener("change", renderHistory);
+$("histCsv").addEventListener("click", () => exportHistory("csv"));
+$("histJson").addEventListener("click", () => exportHistory("json"));
+document.querySelector('.tab[data-tab="history"]').addEventListener("click", renderHistory);
+
 // ------------------------------------------------------------------ settings
 
 function renderSettings() {
@@ -964,6 +1060,7 @@ window.__sid = {
   bench: () => ({ mode: app.dataset.bench, project: $("projectName").textContent, ...buildWorkbench({
     activeProject: ui.project, sessions: [...ui.sessions.values()], claude: ui.components.claude_code }) }),
   status: () => $("status").textContent,
+  history: (since, until) => request("telemetry.history", { since, until }),
   voice: () => ui.voice || null,
   accent: () => getComputedStyle(document.documentElement).getPropertyValue("--amber").trim(),
 };

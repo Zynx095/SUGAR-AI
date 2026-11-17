@@ -227,6 +227,11 @@ class UISettings(BaseModel):
     developer_mode: bool = False
 
 
+class TelemetrySettings(BaseModel):
+    enabled: bool = True
+    retention_days: int = 30  # measurements and events older than this are deleted on start
+
+
 class LoggingSettings(BaseModel):
     level: str = "INFO"
     console: bool = True
@@ -248,6 +253,7 @@ class Settings(BaseModel):
     weather: WeatherSettings = WeatherSettings()
     ui: UISettings = UISettings()
     logging: LoggingSettings = LoggingSettings()
+    telemetry: TelemetrySettings = TelemetrySettings()
 
     def secret(self, env_name: str | None) -> str | None:
         """Read a secret from the environment by variable name."""

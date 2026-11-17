@@ -370,3 +370,12 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
   .app[data-bench="open"] .bench-body { animation: none; }
   .transcript-scroll { scroll-behavior: auto; }
 }
+
+/* telemetry history */
+.history-controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 12px; color: var(--ash); }
+.history-controls input, .history-controls select { background: var(--graphite-up); border: 1px solid var(--seam);
+  color: var(--bone); border-radius: 4px; padding: 3px 6px; font-size: var(--t-xs); }
+.history-chart { width: 100%; height: 160px; border: 1px solid var(--seam); border-radius: var(--radius-small); }
+.history-line { fill: none; stroke: var(--amber); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.history-dot { fill: var(--gold); }
+.history-note { color: var(--ash); margin: 8px 0 14px; }

@@ -617,8 +617,11 @@ class ConversationManager:
                 await self.quick_reply("Yes?")
             elif was_busy:
                 await self.quick_reply("Stopped.")
+            elif idle and name == "control.stop" and self._sessions.running():
+                # Nothing in the foreground, but Claude Code is working: ask before killing a long task.
+                asyncio.ensure_future(self._confirm_stop_claude(self._sessions.running()))
             elif idle and name == "control.stop" and self.on_idle_stop is not None:
-                # Nothing of SID's to stop: an embedding app may still give "stop" a meaning.
+                # Nothing of SID's to stop: "stop" means the music or video that's playing.
                 reply = await self.on_idle_stop()
                 if reply:
                     await self.quick_reply(reply)
@@ -642,6 +645,16 @@ class ConversationManager:
             await self.quick_reply(self._last_reply_spoken or "Nothing to repeat yet.")
         trace.info["route"] = "control"
         self._metrics.finish(trace)
+
+    async def _confirm_stop_claude(self, running) -> None:
+        names = ", ".join(sorted({session.project_name for session in running}))
+        approved = await self._permissions.confirm(f"stop the Claude Code task in {names}", tool="claude.stop")
+        if approved:
+            for session in running:
+                await self._sessions.stop(session, reason="the user said stop")
+            await self.quick_reply("Stopped the Claude Code task.")
+        else:
+            await self.quick_reply("Claude Code keeps working.")
 
     async def quick_reply(self, text: str) -> None:
         """Short spoken response outside of a full turn ("Yeah?", "Stopped.")."""

@@ -68,6 +68,12 @@ class SIDApp:
         self.state = StateMachine(self.bus)
         data = settings.paths.data_dir
         self.metrics = MetricsRecorder(self.bus, data / "metrics")
+        self.telemetry = None
+        if settings.telemetry.enabled:
+            from sugar.core.telemetry import TelemetryStore
+
+            self.telemetry = TelemetryStore(data / "telemetry.db", settings.telemetry.retention_days)
+            self.telemetry.attach(self.bus)
         self.memory = MemoryStore(data / "sugar.db")
         self.working = WorkingMemory.load(data / "working.json")
         self.projects = ProjectRegistry(settings.coding.project_roots, data / "projects.json",
@@ -340,6 +346,8 @@ class SIDApp:
         await self.pool.aclose()
         self.ollama_server.stop()
         self.memory.close()
+        if self.telemetry is not None:
+            self.telemetry.close()
 
     # ------------------------------------------------------------------ UI bridge
 
@@ -413,6 +421,21 @@ class SIDApp:
                                                  {"personality": str(message.get("personality", "sid"))},
                                                  origin="user")
             return {"ok": result.ok, "summary": result.summary}
+        if cmd == "telemetry.history":
+            if self.telemetry is None:
+                return {"ok": False, "error": "telemetry is off"}
+            return {"ok": True, "history": self.telemetry.history(message.get("since"), message.get("until"))}
+        if cmd == "telemetry.export":
+            if self.telemetry is None:
+                return {"ok": False, "error": "telemetry is off"}
+            fmt = "csv" if message.get("format") == "csv" else "json"
+            content = self.telemetry.export(fmt, message.get("since"), message.get("until"))
+            return {"ok": True, "format": fmt, "content": content,
+                    "filename": f"sid-telemetry-{time.strftime('%Y%m%d-%H%M%S')}.{fmt}"}
+        if cmd == "telemetry.clear":
+            if self.telemetry is not None:
+                self.telemetry.clear()
+            return {"ok": True}
         if cmd == "project.clear":
             self.working.clear_project()
             self.bus.publish("project.active", name=None, path=None, stack=[])

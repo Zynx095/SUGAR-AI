@@ -343,3 +343,34 @@ def test_look_alike_wake_is_verified_before_waking(settings):
 
     assert run(scenario(False)) == ["wake.rejected", "stt.ignored"]
     assert run(scenario(True))[0] == "wake.detected"
+
+
+def test_stop_while_only_claude_code_is_running_asks_first(settings):
+    from sugar.coding.sessions import CodingSession
+
+    async def scenario(answer):
+        app = make_app(settings, [])
+        session = CodingSession("shop", "D:/work/shop", status="running", task="add tests")
+        app.sessions._sessions["d:/work/shop"] = session
+        stopped = []
+
+        async def stop(target, reason=""):
+            stopped.append(reason)
+            target.status = "cancelled"
+            return True
+
+        app.sessions.stop = stop
+        await app.start()
+        asked = asyncio.Event()
+        questions = []
+        app.bus.subscribe("permission.request", lambda e: (questions.append(e.data["action"]), asked.set()))
+        await app.conversation.handle_text("stop")
+        await asyncio.wait_for(asked.wait(), 3)
+        await app.conversation.handle_text(answer)
+        await asyncio.sleep(0.3)
+        await app.shutdown()
+        return questions, stopped
+
+    questions, stopped = run(scenario("yes"))
+    assert questions == ["stop the Claude Code task in shop"] and stopped == ["the user said stop"]
+    assert run(scenario("no"))[1] == []
