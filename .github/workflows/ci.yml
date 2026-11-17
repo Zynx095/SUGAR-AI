@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # SID is Windows-only (Win32 desktop control, WebView2, PowerShell).
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      PYTHONIOENCODING: utf-8
+      HF_HUB_OFFLINE: "1"
+      # No secrets in CI: model providers, Claude Code and the desktop are mocked by the tests.
+      # The headless-Edge WebGL test depends on the runner's GPU emulation; run it locally.
+      SID_UI_BROWSER_TESTS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install (CPU PyTorch, then the rest)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+      - name: Lint
+        run: python -m ruff check sugar tests tools
+      - name: Validate configuration
+        run: python -c "from sugar.config.settings import load_settings; load_settings(use_env=False); print('settings ok')"
+      - name: UI unit tests
+        run: node --test tests/ui/entity-state.test.mjs tests/ui/render-loop.test.mjs tests/ui/workbench-model.test.mjs tests/ui/highlight.test.mjs
+      - name: Python tests
+        run: python -m pytest --ignore=tests/test_desktop_live.py -q

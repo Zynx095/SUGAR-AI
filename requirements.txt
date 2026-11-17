@@ -1,4 +1,4 @@
-# Sugar — runtime dependencies (Python 3.12, Windows 10/11)
+# SID — runtime dependencies (Python 3.12, Windows 10/11)
 #
 # GPU (recommended): install the CUDA 12.8 build of PyTorch FIRST so MeloTTS and
 # Whisper run on RTX 50-series (Blackwell) cards:
@@ -28,6 +28,7 @@ huggingface_hub>=0.23
 g2p_en>=2.1
 inflect>=7.0
 scipy>=1.11
+librosa>=0.10           # voice profile DSP (pitch analysis and shifting)
 
 # Language models
 anthropic>=1.0          # only used when ANTHROPIC_API_KEY is set
