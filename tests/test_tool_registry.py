@@ -72,7 +72,10 @@ def test_permission_policy_matrix(bus):
     assert not manager.requires_confirmation(sensitive, PermissionLevel.SENSITIVE, "user")
     assert manager.requires_confirmation(destructive, PermissionLevel.DESTRUCTIVE, "user")
     trusted = PermissionManager(PermissionSettings(trusted_tools=["files.delete"]), bus)
-    assert not trusted.requires_confirmation(destructive, PermissionLevel.DESTRUCTIVE, "model")
+    # trusted_tools skip confirmation only up to modifications; destructive actions are always confirmed
+    assert trusted.requires_confirmation(destructive, PermissionLevel.DESTRUCTIVE, "model")
+    assert not trusted.requires_confirmation(sensitive, PermissionLevel.SENSITIVE, "model")
+
 
 
 def build_executor(bus, tool, **perm):
