@@ -4,7 +4,7 @@ The core publishes everything on the event bus; this server forwards events
 to connected UIs (batched every 30 ms) and turns UI commands into calls on
 the application. It listens on 127.0.0.1 only, requires a random per-launch
 token on the WebSocket, and rejects foreign ``Origin`` headers, so a web page
-in the user's browser cannot drive Sugar.
+in the user's browser cannot drive SID.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class UIServer:
         self._on_command = on_command
         self._snapshot = snapshot
         # A fixed token can be supplied for automation/tests; normally it is random per launch.
-        self.token = os.environ.get("SUGAR_UI_TOKEN") or secrets.token_urlsafe(24)
+        self.token = os.environ.get("SID_UI_TOKEN") or os.environ.get("SUGAR_UI_TOKEN") or secrets.token_urlsafe(24)
         self._clients: set[ServerConnection] = set()
         self._queue: list[dict[str, Any]] = []
         self._server: Server | None = None

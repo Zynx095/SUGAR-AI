@@ -1,6 +1,10 @@
-// Small, safe markdown renderer for Sugar's replies.
+// Small, safe markdown renderer for SID's replies.
 // Everything is HTML-escaped first; only a known subset of markdown is turned
 // back into elements, and links are limited to http(s).
+
+import { highlight } from "./highlight.js";
+
+const LONG_CODE_LINES = 18; // longer blocks start collapsed so the conversation never buries the entity
 
 const escapeHtml = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -57,9 +61,14 @@ export function renderMarkdown(source) {
       i++;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
       const lang = fence[2] || "";
+      const long = body.length > LONG_CODE_LINES;
       out.push(
-        `<div class="code-block"><span class="code-lang">${escapeHtml(lang)}</span>` +
-          `<button type="button" class="copy">Copy</button><pre><code>${escapeHtml(body.join("\n"))}</code></pre></div>`
+        `<figure class="code-block${long ? " collapsed" : ""}" data-lines="${body.length}">` +
+          `<figcaption><span class="code-lang">${escapeHtml(lang || "code")}</span>` +
+          `<button type="button" class="copy">Copy</button></figcaption>` +
+          `<pre><code>${highlight(body.join("\n"), lang)}</code></pre>` +
+          (long ? `<button type="button" class="expand">Show all ${body.length} lines</button>` : "") +
+          `</figure>`
       );
       continue;
     }

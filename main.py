@@ -1,4 +1,4 @@
-"""Sugar — entry point.
+"""SID — entry point.
 
     python main.py                       voice + UI window (default)
     python main.py --window edge         UI in an Edge app window instead of pywebview
@@ -20,7 +20,7 @@ os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
-from sugar.app.application import SugarApp  # noqa: E402
+from sugar.app.application import SIDApp  # noqa: E402
 from sugar.config.settings import load_settings  # noqa: E402
 from sugar.core.logging import setup_logging  # noqa: E402
 
@@ -28,7 +28,7 @@ log = logging.getLogger("sugar.main")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sugar voice assistant")
+    parser = argparse.ArgumentParser(description="SID, a software-engineering assistant")
     parser.add_argument("--no-voice", action="store_true", help="disable microphone and speech recognition")
     parser.add_argument("--no-ui", action="store_true", help="run without the UI (voice only)")
     parser.add_argument("--window", choices=["auto", "webview", "edge", "browser", "none"], help="how to show the UI")
@@ -37,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-async def run_text_once(app: SugarApp, text: str) -> int:
+async def run_text_once(app: SIDApp, text: str) -> int:
     app.audio_output = False
     await app.start()
     replies: list[str] = []
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
                   settings.logging.console)
 
     if args.text:
-        app = SugarApp(settings, voice=False)
+        app = SIDApp(settings, voice=False)
         return asyncio.run(run_text_once(app, args.text))
 
     window_mode = args.window or settings.ui.window
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     voice = not args.no_voice
 
     async def core(holder: dict) -> None:
-        app = SugarApp(settings, voice=voice)
+        app = SIDApp(settings, voice=voice)
         holder["app"] = app
         holder["ready"].set()
         try:
@@ -100,9 +100,9 @@ def main(argv: list[str] | None = None) -> int:
             pass
     except KeyboardInterrupt:
         return 1
-    app: SugarApp | None = holder.get("app")
+    app: SIDApp | None = holder.get("app")
     if app is None:
-        print("Sugar failed to start:", holder.get("error") or "core exited before the app was created")
+        print("SID failed to start:", holder.get("error") or "core exited before the app was created")
         return 1
 
     if window_mode != "none" and settings.ui.enabled:
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
                     open_external(url, "edge")
             else:
                 open_external(url, window_mode)
-            print(f"Sugar UI: {url}")
+            print(f"SID UI: {url}")
 
     try:
         while thread.is_alive():
@@ -136,11 +136,11 @@ def _start_core(core, holder: dict) -> tuple[threading.Thread, dict]:
             asyncio.run(core(holder))
         except Exception as exc:
             holder["error"] = exc
-            log.exception("Sugar core crashed")
+            log.exception("SID core crashed")
         finally:
             holder["ready"].set()
 
-    thread = threading.Thread(target=target, name="sugar-core", daemon=False)
+    thread = threading.Thread(target=target, name="sid-core", daemon=False)
     thread.start()
     time.sleep(0)  # let the core thread begin
     return thread, holder
