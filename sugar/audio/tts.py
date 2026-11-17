@@ -7,7 +7,10 @@
   Robotic, but it has no dependencies; used only if MeloTTS fails.
 
 :class:`Synthesizer` owns the fallback order and a small cache for short
-phrases Sugar says often ("Done.", "Yeah?") so they cost nothing.
+phrases SID says often ("Done.", "Yes?") so they cost nothing.
+
+MeloTTS output is shaped into SID's voice by :mod:`sugar.audio.voice_profile`
+(``tts.voice_profile``; ``natural`` turns it off).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Protocol
 
 import numpy as np
 
+from sugar.audio.voice_profile import apply_profile, get_profile, length_scale_factor
 from sugar.config.settings import TTSSettings
 from sugar.core.processes import CREATE_NO_WINDOW
 
@@ -112,6 +116,7 @@ class MeloEngine:
             raise RuntimeError("MeloTTS is not loaded")
         text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
         s = self._settings
+        profile = get_profile(s.voice_profile)
         with self._lock, torch.inference_mode():
             bert, ja_bert, phones, tones, lang_ids = melo_utils.get_text_for_tts_infer(
                 text, tts.language, tts.hps, tts.device, tts.symbol_to_id
@@ -129,9 +134,10 @@ class MeloEngine:
                 sdp_ratio=s.sdp_ratio,
                 noise_scale=s.noise_scale,
                 noise_scale_w=s.noise_scale_w,
-                length_scale=1.0 / max(0.5, s.speed),
+                length_scale=length_scale_factor(profile) / max(0.5, s.speed),
             )[0][0, 0]
-            return audio.float().cpu().numpy().astype(np.float32)
+            raw = audio.float().cpu().numpy().astype(np.float32)
+        return apply_profile(raw, self.sample_rate, profile)
 
 
 class SapiEngine:
@@ -143,7 +149,7 @@ class SapiEngine:
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         "$s.Rate = {rate}; "
-        "$s.SetOutputToWaveFile($env:SUGAR_TTS_OUT); "
+        "$s.SetOutputToWaveFile($env:SID_TTS_OUT); "
         "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"
     )
 
@@ -166,7 +172,7 @@ class SapiEngine:
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", self._SCRIPT.format(rate=rate)],
                 input=text.encode("utf-8"),
-                env={**os.environ, "SUGAR_TTS_OUT": path},
+                env={**os.environ, "SID_TTS_OUT": path},
                 capture_output=True,
                 timeout=30,
                 check=True,
