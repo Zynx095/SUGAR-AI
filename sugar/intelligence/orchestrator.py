@@ -280,6 +280,14 @@ class Orchestrator:
                            category="non_engineering")
 
     def _clarify(self, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
+        if decision.project is not None and decision.reason == "change not specified":
+            project = decision.project
+            self._working.set_project(project.name, project.path)
+            self._bus.publish("project.active", name=project.name, path=project.path,
+                              stack=getattr(project, "stack", []))
+            out.say(f"I'll work in {project.name}. What should I change?")
+            out.show(f"Project directory: `{project.path}`")
+            return TurnSummary("clarify", ok=True, category=decision.category)
         if self._working.active_project is None and decision.project is None:
             out.say("There's no engineering task in context. State the change and the project it applies to.")
         else:

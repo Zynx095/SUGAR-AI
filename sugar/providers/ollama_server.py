@@ -74,6 +74,7 @@ class OllamaServer:
         process, self._process = self._process, None
         if process is None or process.poll() is not None:
             return
+        self.status = "stopped"
         # `ollama serve` starts model runner children: end the whole tree.
         subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True,
                        creationflags=CREATE_NO_WINDOW, check=False)

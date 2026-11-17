@@ -129,6 +129,12 @@ _DEEP = re.compile(
     r"\b(?:think (?:hard|carefully|deeply|it through)|in detail|step by step|deep dive|pros and cons|trade-?offs?|"
     r"compare|comparison|design (?:a|an|the)|architecture|evaluate|critique|prove|derivation)\b"
 )
+# "modify my portfolio", "deploy the jiva app": the project is the verb's object.
+_PROJECT_OBJECT = re.compile(
+    r"^(?:modify|update|change|fix|edit|improve|refactor|redesign|polish|deploy|test|build|work on|review|"
+    r"analy[sz]e|audit|clean up|restyle|optimi[sz]e|upgrade|document)\s+(?:my |the |our )?"
+    r"(?P<name>[\w][\w .\-]{1,40}?)(?: project| repo| repository| codebase| app| site| website)?[.?!]?$"
+)
 _NAMED_PROJECT = re.compile(
     r"\b(?:in|on|for|inside|within|to) (?:the |my |our )?(?P<name>[\w][\w .\-]{1,40}?)"
     r"(?: project| repo| repository| codebase| app)?(?:[.?!]|$)"
@@ -157,7 +163,7 @@ class Router:
         if resolve is None:
             return None
         plain = normalize(text)
-        for match in _NAMED_PROJECT.finditer(plain):
+        for match in [*_PROJECT_OBJECT.finditer(plain), *_NAMED_PROJECT.finditer(plain)]:
             name = match.group("name").strip()
             if name in {"it", "this", "that", "here", "there", "python", "react", "javascript", "typescript"}:
                 continue
@@ -168,6 +174,18 @@ class Router:
             if project is not None:
                 return project
         return None
+
+    def _object_is(self, plain: str, project: Any) -> bool:
+        """Whether the verb's whole object is the project itself ("modify my portfolio")."""
+        match = _PROJECT_OBJECT.match(plain)
+        resolve = self._fastpath.resolve_project
+        if not match or resolve is None:
+            return False
+        try:
+            named = resolve(match.group("name").strip())
+        except Exception:
+            return False
+        return named is not None and getattr(named, "path", None) == getattr(project, "path", None)
 
     def project_reply(self, text: str) -> Any | None:
         """The user answering "which project?" with just a name ("Jiva", "the portfolio one")."""
@@ -279,6 +297,11 @@ class Router:
         if category == Category.AMBIGUOUS:
             return RouteDecision(Route.CLARIFY, universal.reason, classification=classification, project=project,
                                  universal=universal)
+        if (category == Category.BUILD_EXECUTION and project is not None and self._object_is(plain, project)
+                and not re.search(r"\b(?:deploy|test|build|upgrade)\b", plain)):
+            # "Modify my portfolio": the project is clear, the change isn't. Ask before touching anything.
+            return RouteDecision(Route.CLARIFY, "change not specified", classification=classification,
+                                 project=project, universal=universal)
         if category in (Category.BUILD_EXECUTION, Category.PROJECT_ANALYSIS):
             route = Route.PROJECT_ANALYSIS if category == Category.PROJECT_ANALYSIS else Route.BUILD_EXECUTION
             return RouteDecision(route, universal.reason, classification=classification, project=project,

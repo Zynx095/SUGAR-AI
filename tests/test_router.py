@@ -283,3 +283,12 @@ def test_status_questions_go_to_the_workbench(settings):
                                   "list the processes using the most memory", "kill discord"])
 def test_system_questions_go_to_the_agent(settings, text):
     assert router(settings).route(text).route == Route.DESKTOP, text
+
+
+def test_named_project_without_a_change_asks_what_to_change(settings):
+    working = WorkingMemory()
+    working.set_project("SUGAR-AI", "D:/sugar")  # an unrelated active repository
+    decision = router(settings, working).route("Modify my portfolio.")
+    assert decision.route == Route.CLARIFY and decision.project.name == "yukith-portfolio"
+    specific = router(settings, working).route("Fix the contact form in my portfolio")
+    assert specific.route == Route.BUILD_EXECUTION and specific.project.name == "yukith-portfolio"
