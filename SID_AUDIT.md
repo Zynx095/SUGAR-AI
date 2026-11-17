@@ -1,4 +1,6 @@
 # SID — readiness audit
+> Historical: this audit predates the universal transformation. Current status is in
+> [SID_FINAL_ACCEPTANCE_REPORT.md](SID_FINAL_ACCEPTANCE_REPORT.md).
 
 Date: 18 November 2026 · Branch `sid/transform` (12 commits on top of `rework/sugar-v2`, not merged or
 pushed) · 76 files changed, +10.5k / −1.6k lines.
