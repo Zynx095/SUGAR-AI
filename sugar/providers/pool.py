@@ -164,7 +164,9 @@ class ProviderPool:
         return {"ttft_ms": circuit.ttft_ms, "samples": circuit.samples}
 
     def connectivity(self) -> str:
-        """online | degraded | local_fallback | offline — from real health checks and circuit state."""
+        """online | degraded | local_fallback | local_only | offline — from real health checks and circuit state.
+
+        local_only: no online provider is configured at all (by choice), and the local model is up."""
         now = time.monotonic()
         up = {name for name, circuit in self._circuits.items()
               if name in self.providers and circuit.available(now) and (circuit.health is None or circuit.health.ok)}
@@ -172,7 +174,9 @@ class ProviderPool:
         local = set(self.providers) - external
         if not up:
             return "offline"
-        if external and not (up & external):
+        if not external:
+            return "local_only"
+        if not (up & external):
             return "local_fallback" if up & local else "offline"
         if up == set(self.providers):
             return "online"

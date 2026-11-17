@@ -19,6 +19,9 @@ import time
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+# Model caches (MeloTTS, BERT, OpenVoice) live on D:, never in the C: profile.
+if "HF_HOME" not in os.environ and os.path.isdir(r"D:\Sugar_Models\hf"):
+    os.environ["HF_HOME"] = r"D:\Sugar_Models\hf"
 
 from sugar.app.application import SIDApp  # noqa: E402
 from sugar.config.settings import load_settings  # noqa: E402

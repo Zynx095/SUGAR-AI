@@ -138,7 +138,7 @@ function setLink() {
     return;
   }
   const degraded = Object.values(ui.components).some((c) => c.status === "error");
-  const models = { online: "Online", degraded: "Degraded", local_fallback: "Local model only", offline: "Models offline" };
+  const models = { online: "Online", degraded: "Degraded", local_fallback: "Online models down: local model", local_only: "Local model (offline mode)", offline: "Models offline" };
   const connectivity = ui.connectivity;
   link.dataset.state = degraded || connectivity === "offline" ? "degraded"
     : connectivity === "local_fallback" || connectivity === "degraded" ? "partial" : "online";

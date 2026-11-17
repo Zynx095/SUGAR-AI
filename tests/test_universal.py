@@ -217,3 +217,8 @@ def test_provider_router_capabilities_and_latency(bus):
         pool._circuits["freellm"].record_ttft(9000)
         pool._circuits["ollama"].record_ttft(500)
     assert router.chain_for("general_conversation").chain[0] == "ollama"
+
+
+def test_connectivity_local_only_when_no_online_provider_is_configured(bus):
+    pool = ProviderPool({"ollama": Recording("ollama", local=True)}, bus)
+    assert pool.connectivity() == "local_only"
