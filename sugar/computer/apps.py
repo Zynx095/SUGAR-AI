@@ -390,7 +390,8 @@ class ApplicationController:
         if entry is None:
             return R.fail("app.open", name, f"I couldn't find an app called {name}.")
         prefix = f"{note} " if note else ""
-        existing = [] if arguments else self.windows_for(entry)
+        page = entry.kind == "uri" and not entry.target.endswith(":")  # e.g. ms-settings:bluetooth: navigate
+        existing = [] if arguments or page else self.windows_for(entry)
         if existing and not new_window:
             return self._reuse(entry, existing[0], prefix)
         if existing and new_window and entry.name.lower() in NEW_DOCUMENT_KEYS:
@@ -401,6 +402,13 @@ class ApplicationController:
         except Exception as exc:
             return R.fail("app.open", entry.name, f"{entry.name} wouldn't open.", str(exc))
         window = self._wait_for_new_window(entry, before)
+        if window is None and page:
+            # The page opened in the Settings window that was already there.
+            running = self.windows_for(entry)
+            if running:
+                self._backend.activate(running[0].hwnd)
+                self._context.note_action("app.open", running[0], opened=True)
+                return R.ok("app.open", entry.name, f"Opened {entry.name}.", hwnd=running[0].hwnd)
         if window is None:
             return R(True, "app.open", entry.name, f"{prefix}I started {entry.name}, but its window hasn't "
                      "appeared yet.", False, None, {})

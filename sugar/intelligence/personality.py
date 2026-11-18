@@ -64,7 +64,7 @@ _add(Personality(
              ("Why is my code so slow?", "Probably the nested loop on line 40. It's quadratic; a dictionary "
               "lookup makes it linear.")),
     sentences=(1, 3), humour=1, temperature=0.55, pace=1.0, pause_scale=1.0,
-    actions={"open": ("Opening {app}.",), "close": ("Closed {app}.",), "done": ("Done.",)},
+    # plain system confirmations ("Notepad's open.") already fit this personality
     roleplay="Commit to the character; keep your own judgement underneath it."))
 
 _add(Personality(
@@ -117,7 +117,7 @@ _add(Personality(
              ("Why is my code so slow?", "The nested loop on line 40 is O(n²). Replace the inner search with a "
               "dictionary lookup to make it O(n).")),
     sentences=(1, 2), humour=0, temperature=0.3, pace=1.03, pause_scale=0.9,
-    actions={"open": ("Opening {app}.",), "close": ("{app} closed.",), "done": ("Completed.",)},
+    # plain system confirmations ("Notepad's open.") already fit this personality
     roleplay="Stay in character but keep it restrained and concise."))
 
 _add(Personality(
@@ -152,7 +152,7 @@ _add(Personality(
 - Minimal enthusiasm; let precision carry the confidence. Never theatrical to the point of being unclear.""",
     samples=(("Can you open Paint?", "Paint. Opening."),),
     sentences=(1, 2), humour=1, temperature=0.6, pace=0.95, pause_scale=1.25,
-    actions={"open": ("Opening {app}.",), "close": ("{app} is closed.",), "done": ("It's done.",)},
+    # plain system confirmations ("Notepad's open.") already fit this personality
     roleplay="A measured, commanding presence in any role."))
 
 # Which personality each voice starts with (a voice's default; the user can pin another).

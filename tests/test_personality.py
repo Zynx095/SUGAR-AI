@@ -82,7 +82,7 @@ def test_action_lines_rotate_and_respect_serious_moments():
     blue, pro = PERSONALITIES["blue"], PERSONALITIES["professional"]
     lines = {action_line(blue, "open", "Opened Paint.", app="Paint", rng=rng) for _ in range(12)}
     assert len(lines) >= 3 and all("Paint" in line for line in lines)
-    assert action_line(pro, "open", "Opened Paint.", app="Paint") == "Opening Paint."
+    assert action_line(pro, "open", "Paint's open.", app="Paint") == "Paint's open."  # plain confirmation
     assert action_line(blue, "open", "Opened Paint.", app="Paint", serious=True) == "Opened Paint."
     assert action_line(blue, "unknown", "Did it.", app="Paint") == "Did it."
 

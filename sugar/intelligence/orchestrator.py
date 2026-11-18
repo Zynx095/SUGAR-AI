@@ -246,7 +246,7 @@ class Orchestrator:
         app = str(data.get("target") or args.get("name") or "").strip()
         if not app or len(app) > 40 or app.lower() in ("this", "that", "it", "last_opened"):
             return result.summary
-        if not re.match(r"^(?:Opened|Opening|Switched|Closed|Closing|Focused)\b", result.summary):
+        if not re.search(r"^(?:Opened|Opening|Switched|Closed|Closing|Focused)\b|'s open\.$|\bclosed\.$", result.summary):
             return result.summary  # something other than a plain success ("save changes?") — say it as is
         personality, _ = self._context.personality()
         return action_line(personality, kind, result.summary, app=app[:1].upper() + app[1:])
