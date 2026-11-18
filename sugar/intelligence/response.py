@@ -206,7 +206,7 @@ class SpeechChunker:
         self,
         *,
         first_min_chars: int = 2,
-        min_chars: int = 40,
+        min_chars: int = 110,  # several sentences per synthesis call: fewer seams, continuous prosody
         max_chars: int = 240,
         max_spoken_chars: int | None = 900,
     ) -> None:
@@ -351,12 +351,20 @@ class SpeechChunker:
         """Index just after the boundary to cut at, or None to wait for more text."""
         if not text.strip():
             return None
-        minimum = self._first_min if self._emitted_count == 0 else self._min
+        # The first chunk is spoken as soon as possible; the second may be short so audio keeps flowing while
+        # the model writes; later chunks are longer so prosody runs across sentences.
+        minimum = self._first_min if self._emitted_count == 0 else min(self._min, 50) if self._emitted_count == 1 \
+            else self._min
         for match in _BOUNDARY_RE.finditer(text):
             if _is_abbreviation(text, match.start()):
                 continue
             if match.end() >= minimum:
                 return match.end()
+        if self._emitted_count == 0 and not final and len(text) >= FIRST_PHRASE_CHARS:
+            # A long opening sentence: start speaking at its first clause instead of waiting for the full stop.
+            for match in re.finditer(r"[,;:](?=\s)|\s[-–—](?=\s)", text):
+                if match.end() >= 25:
+                    return match.end()
         if len(text) > self._max:
             window = text[: self._max]
             for pattern in (r"[;:](?=\s)", r",(?=\s)", r"\s"):
@@ -367,6 +375,7 @@ class SpeechChunker:
         return len(text) if final else None
 
 
+FIRST_PHRASE_CHARS = 70  # an opening sentence longer than this starts at its first clause
 _BOUNDARY_RE = re.compile(r"[.!?…]+[\"')\]]*(?=\s)")
 
 

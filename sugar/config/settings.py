@@ -2,9 +2,9 @@
 
 Precedence (lowest → highest):
     1. defaults declared on the models below
-    2. ``sugar.yaml`` in the project root (user-editable)
+    2. ``sid.yaml`` in the project root (user-editable; a legacy ``sugar.yaml`` is still read)
     3. ``data/overrides.json`` (changes made at runtime from the UI)
-    4. environment variables ``SUGAR__SECTION__KEY=value`` (``.env`` is loaded first)
+    4. environment variables ``SID__SECTION__KEY=value`` (legacy ``SUGAR__`` also works; ``.env`` is loaded first)
 
 Secrets are never stored in config files: providers reference the *name* of
 the environment variable that holds their key.
@@ -53,7 +53,7 @@ class VADSettings(BaseModel):
     endpoint_incomplete_ms: int = 1700  # "I want you to…", "actually wait…"
     max_utterance_s: float = 45.0
     barge_in_threshold: float = 0.75
-    barge_in_ms: int = 192  # sustained voice needed to interrupt Sugar
+    barge_in_ms: int = 192  # sustained voice needed to interrupt SID
 
 
 class STTSettings(BaseModel):
@@ -67,7 +67,7 @@ class STTSettings(BaseModel):
     partial_interval_ms: int = 700
     hotwords: bool = False  # bias Whisper toward `vocabulary` (raises hallucinations on noise)
     vocabulary: list[str] = Field(
-        default_factory=lambda: ["Sugar", "Claude", "Claude Code", "VS Code", "Spotify", "GitHub"]
+        default_factory=lambda: ["SID", "Claude", "Claude Code", "VS Code", "GitHub", "Python", "TypeScript"]
     )
 
 
@@ -75,13 +75,18 @@ class TTSSettings(BaseModel):
     engine: Literal["melo", "sapi", "none"] = "melo"
     device: Literal["auto", "cuda", "cpu"] = "auto"
     voice: str = "EN-Newest"
-    speed: float = 1.1
+    voice_profile: str = "sid"  # sid (cloned) | sid_dsp | sid_v2 | sid_clean | natural
+    voice_reference: str = "data/voice_samples/ULTRON_SID.mp3"  # the voice "sid" is cloned from
+    pitch_offset: float = 0.0  # semitones added to any voice ("make your voice deeper")
+    palettes: dict[str, list[str]] = Field(default_factory=dict)  # per-voice entity colours (see audio/voices.py)
+    clone_tau: float = 0.3  # OpenVoice conversion temperature
+    speed: float = 0.97  # measured pacing
     sdp_ratio: float = 0.5
     noise_scale: float = 0.6
     noise_scale_w: float = 0.8
     volume: float = 1.0
     fallback: bool = True  # fall back to Windows SAPI if MeloTTS fails
-    max_spoken_chars: int = 900  # beyond this Sugar says "the rest is on screen"
+    max_spoken_chars: int = 900  # beyond this SID says "the rest is on screen"
 
 
 class FreeLLMSettings(BaseModel):
@@ -102,8 +107,13 @@ class FreeLLMSettings(BaseModel):
 class OllamaSettings(BaseModel):
     enabled: bool = True
     base_url: str = "http://127.0.0.1:11434"
-    chat_model: str = "gemma3:4b"
-    smart_model: str = "deepseek-r1:8b"
+    chat_model: str = "qwen2.5:3b"  # fits next to the voice models in 8 GB of VRAM
+    smart_model: str = "qwen2.5:3b"
+    # Portable Ollama on D: that SID starts itself when no server is running (models also on D:).
+    executable: str | None = r"D:\Sugar_Models\ollama\ollama.exe"
+    models_dir: str | None = r"D:\Sugar_Models\ollama\models"
+    manage_server: bool = True
+    supports_tools: bool = True
     keep_alive: str = "10m"
     timeout_s: float = 60.0
 
@@ -122,17 +132,26 @@ class LLMSettings(BaseModel):
     ollama: OllamaSettings = OllamaSettings()
     claude: ClaudeSettings = ClaudeSettings()
     chat_chain: list[str] = Field(default_factory=lambda: ["freellm", "ollama", "claude"])
+    routes: dict[str, list[str]] = Field(default_factory=dict)  # per-category provider chains (providers/routing.py)
     reasoning_chain: list[str] = Field(default_factory=lambda: ["claude", "freellm", "ollama"])
     temperature: float = 0.6
 
 
 class ConversationSettings(BaseModel):
     user_name: str = "Yuki"
-    assistant_name: str = "Sugar"
-    wake_words: list[str] = Field(
-        default_factory=lambda: ["sugar", "shugar", "suga", "sugga", "sugah", "shuga"]
-    )
+    assistant_name: str = "SID"
+    # "Hey SID" and a bare "SID" at the start or end of an utterance. Whisper's usual spellings of the name
+    # are listed; words that are also common English ("side", "said", "seed") only count after "hey".
+    wake_words: list[str] = Field(default_factory=lambda: ["sid", "syd", "sidd", "sydd", "cid"])
+    wake_words_after_hey: list[str] = Field(default_factory=lambda: ["side", "said", "seed", "sit", "sed", "cyd", "sith"])
     engagement: Literal["wake_word", "always"] = "wake_word"
+    wake_verify: bool = True  # re-check look-alike wake transcripts ("He said") acoustically before waking
+    # Operate the PC (apps, windows, browser, YouTube/Spotify, files, terminal) as well as engineering work.
+    desktop_control: bool = True
+    # "universal": SID handles any legitimate request. "engineering_only": the strict v1 boundary.
+    scope: Literal["universal", "engineering_only"] = "universal"
+    personality: str = "sid"  # sid | cinematic | friendly | professional | creative
+    health_external: bool = False  # send personal health information to online models without asking
     engagement_timeout_s: float = 45.0
     history_turns: int = 12
     context_chars: int = 12000
@@ -167,6 +186,7 @@ class CodingSettings(BaseModel):
     )
     discovery_depth: int = 2
     progress_interval_s: float = 30.0
+    task_timeout_s: float = 1800.0  # a Claude Code run is stopped after this long (0 = no limit)
 
 
 class ComputerSettings(BaseModel):
@@ -207,6 +227,11 @@ class UISettings(BaseModel):
     developer_mode: bool = False
 
 
+class TelemetrySettings(BaseModel):
+    enabled: bool = True
+    retention_days: int = 30  # measurements and events older than this are deleted on start
+
+
 class LoggingSettings(BaseModel):
     level: str = "INFO"
     console: bool = True
@@ -228,6 +253,7 @@ class Settings(BaseModel):
     weather: WeatherSettings = WeatherSettings()
     ui: UISettings = UISettings()
     logging: LoggingSettings = LoggingSettings()
+    telemetry: TelemetrySettings = TelemetrySettings()
 
     def secret(self, env_name: str | None) -> str | None:
         """Read a secret from the environment by variable name."""
@@ -252,13 +278,15 @@ def _deep_merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
 
 
 def _env_overrides(environ: dict[str, str]) -> dict[str, Any]:
-    """Turn ``SUGAR__TTS__SPEED=1.2`` into ``{"tts": {"speed": "1.2"}}``.
+    """Turn ``SID__TTS__SPEED=1.2`` into ``{"tts": {"speed": "1.2"}}``.
 
-    Values are parsed as YAML scalars so booleans, numbers and lists work.
+    Values are parsed as YAML scalars so booleans, numbers and lists work. Legacy ``SUGAR__`` names are
+    applied first, so a ``SID__`` variable for the same key wins.
     """
     result: dict[str, Any] = {}
-    for name, raw in environ.items():
-        if not name.upper().startswith("SUGAR__"):
+    ordered = sorted(environ.items(), key=lambda item: item[0].upper().startswith("SID__"))
+    for name, raw in ordered:
+        if not name.upper().startswith(("SID__", "SUGAR__")):
             continue
         parts = [p.lower() for p in name.split("__")[1:] if p]
         if not parts:
@@ -285,7 +313,10 @@ def load_settings(
         load_dotenv(ROOT_DIR / ".env", override=False)
 
     layers: dict[str, Any] = {}
-    config_file = config_file or ROOT_DIR / "sugar.yaml"
+    if config_file is None:
+        config_file = ROOT_DIR / "sid.yaml"
+        if not config_file.exists() and (ROOT_DIR / "sugar.yaml").exists():
+            config_file = ROOT_DIR / "sugar.yaml"  # legacy name
     if config_file.exists():
         loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         if not isinstance(loaded, dict):
@@ -301,7 +332,7 @@ def load_settings(
         try:
             layers = _deep_merge(layers, json.loads(overrides_path.read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
-            pass  # a corrupt override file must never stop Sugar from starting
+            pass  # a corrupt override file must never stop SID from starting
 
     if use_env:
         layers = _deep_merge(layers, _env_overrides(dict(os.environ)))

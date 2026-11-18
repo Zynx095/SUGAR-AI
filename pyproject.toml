@@ -1,7 +1,7 @@
 [project]
-name = "sugar-ai"
-version = "2.0.0"
-description = "Sugar — a voice-first desktop agent for Windows"
+name = "sid"
+version = "3.0.0"
+description = "SID — a software-engineering assistant for Windows, with Claude Code as its execution engine"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
@@ -13,7 +13,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["melo", "venv", "data"]
+extend-exclude = ["melo", "openvoice", "venv", "data"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC"]

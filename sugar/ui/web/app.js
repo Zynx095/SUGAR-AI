@@ -1,44 +1,86 @@
-import { Orb } from "./orb.js";
+import { StateTracker } from "./entity-state.js";
 import { renderMarkdown } from "./markdown.js";
+import { buildWorkbench, NO_PROJECT } from "./workbench-model.js";
 
 const $ = (id) => document.getElementById(id);
 const app = $("app");
-const orb = new Orb($("orb"));
 const token = new URLSearchParams(location.search).get("token") || "";
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-const STATE_TEXT = {
-  idle: "Ready",
-  listening: "Listening",
-  transcribing: "Got it",
-  thinking: "Thinking",
-  tool_execution: "Working",
-  speaking: "Speaking",
-  interrupted: "Yeah?",
-  error: "Something went wrong",
-  paused: "Microphone off",
-};
-
-// Look-ups that change nothing don't belong in "Recent actions".
-const QUIET_TOOLS = new Set(["system.time", "system.date", "calc.evaluate", "memory.recall", "claude.status",
-  "media.now_playing", "weather.current", "project.list", "web.lookup", "clipboard.read"]);
-
+const tracker = new StateTracker();
 const ui = {
-  state: "idle",
-  engaged: false,
-  currentTool: null,
-  turns: new Map(), // turn_id -> {el, text}
-  pendingAssistant: null,
+  turns: new Map(), // turn_id -> {el, text, frame}
   events: [],
+  eventTimes: [],
   metrics: [],
-  sessions: new Map(),
+  sessions: new Map(), // project_path -> session
   components: {},
   providers: {},
   settings: {},
   memories: [],
+  project: null, // {name, path} — only what the core reports as active
   devOpen: false,
   ready: false,
   lastRoute: {},
+  lastProvider: null,
+  engaged: false,
+  benchPinned: null, // null = follow the work; true/false = the user chose
+  micPaused: false,
 };
+let entity = null;
+
+// ------------------------------------------------------------------ entity
+
+async function createEntity() {
+  const canvas = $("entity");
+  const { webglAvailable, Entity } = await import("./entity.js").catch((error) => ({ loadError: error }));
+  if (Entity && webglAvailable()) {
+    try {
+      return new Entity(canvas, { reducedMotion });
+    } catch (error) {
+      console.warn("WebGL entity failed; using the 2D fallback", error);
+      return fallback(canvas, String(error && error.message || error));
+    }
+  }
+  return fallback(canvas, Entity ? "WebGL is unavailable" : "entity module failed to load");
+}
+
+async function fallback(canvas, reason) {
+  // A canvas that already handed out a WebGL context can't give a 2D one: swap in a fresh element.
+  const fresh = canvas.cloneNode(false);
+  canvas.replaceWith(fresh);
+  const { FallbackEntity } = await import("./fallback-entity.js");
+  return new FallbackEntity(fresh, { reducedMotion, reason });
+}
+
+// The canvas fills the whole stage (particles drift behind the transcript); the entity itself is
+// centred in the free area of the presence column, above the status line.
+function alignEntity() {
+  if (!entity) return;
+  const stage = $("stage").getBoundingClientRect();
+  const presence = document.querySelector(".presence").getBoundingClientRect();
+  const statusTop = $("status").getBoundingClientRect().top;
+  const zoneTop = presence.top;
+  const zoneBottom = Math.max(zoneTop + 120, statusTop - 8);
+  const x = presence.left + presence.width / 2 - (stage.left + stage.width / 2);
+  const y = (zoneTop + zoneBottom) / 2 - (stage.top + stage.height / 2);
+  const zone = Math.min(presence.width, zoneBottom - zoneTop);
+  entity.setLayout({ x: Math.round(x), y: Math.round(y), zone: Math.round(zone) });
+}
+
+let holdTimer = 0;
+function renderEntityState() {
+  const { state, label } = tracker.snapshot();
+  app.dataset.entity = state;
+  if (entity) entity.setState(state);
+  $("status").textContent = label;
+  $("stopBtn").hidden = !["processing", "thinking", "executing", "speaking"].includes(state);
+  // error and interruption are held briefly; re-evaluate when the hold lapses
+  clearTimeout(holdTimer);
+  const now = Date.now();
+  const nextExpiry = [tracker.errorUntil, tracker.interruptedUntil].filter((t) => t > now).sort()[0];
+  if (nextExpiry) holdTimer = setTimeout(renderEntityState, nextExpiry - now + 20);
+}
 
 // ------------------------------------------------------------------ connection
 
@@ -50,57 +92,98 @@ function connect() {
   socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}`);
   socket.addEventListener("open", () => {
     retry = 500;
+    tracker.setConnected(true);
+    setLink();
+    renderEntityState();
   });
   socket.addEventListener("message", (message) => {
     const payload = JSON.parse(message.data);
     if (payload.type === "snapshot") applySnapshot(payload.data);
     else if (payload.type === "events") payload.events.forEach(handleEvent);
-    else if (payload.type === "reply" && payload.data && payload.data.components) applyRefresh(payload.data);
+    else if (payload.type === "reply" && pendingReplies.has(payload.id)) {
+      pendingReplies.get(payload.id)(payload.data);
+      pendingReplies.delete(payload.id);
+    } else if (payload.type === "reply" && payload.data && payload.data.components) applyRefresh(payload.data);
   });
   socket.addEventListener("close", () => {
-    setStateLine("Reconnecting to Sugar…");
+    tracker.setConnected(false);
+    setLink();
+    renderEntityState();
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 8000);
   });
 }
 
+const pendingReplies = new Map();
+
+/** Send a command and wait for its reply. */
+function request(cmd, data = {}) {
+  return new Promise((resolve) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return resolve(null);
+    const id = nextId++;
+    pendingReplies.set(id, resolve);
+    socket.send(JSON.stringify({ cmd, id, ...data }));
+  });
+}
+
 function send(cmd, data = {}) {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ cmd, id: nextId++, ...data }));
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ cmd, id: nextId++, ...data }));
+}
+
+function setLink() {
+  const link = $("link");
+  if (!tracker.connected) {
+    link.dataset.state = "offline";
+    $("linkText").textContent = "Disconnected";
+    return;
   }
+  const degraded = Object.values(ui.components).some((c) => c.status === "error");
+  const models = { online: "Online", degraded: "Degraded", local_fallback: "Online models down: local model", local_only: "Local model (offline mode)", offline: "Models offline" };
+  const connectivity = ui.connectivity;
+  link.dataset.state = degraded || connectivity === "offline" ? "degraded"
+    : connectivity === "local_fallback" || connectivity === "degraded" ? "partial" : "online";
+  $("linkText").textContent = connectivity ? models[connectivity] || "Connected" : "Connected";
+  link.title = `Models: ${connectivity || "checking"}. Claude Code: ${(ui.components.claude_code || {}).status || "checking"}.`;
 }
 
 // ------------------------------------------------------------------ snapshot
 
 function applySnapshot(data) {
+  tracker.applySnapshot(data);
+  ui.voiceIdentities = data.voice_identities || [];
+  ui.personalities = data.personalities || [];
+  ui.connectivity = data.connectivity || null;
+  applyVoice(data.voice, false);
   ui.components = data.components || {};
   ui.providers = data.providers || {};
   ui.settings = data.settings || {};
   ui.memories = data.memories || [];
+  ui.project = data.project || null;
+  ui.sessions.clear();
+  (data.sessions || []).forEach((s) => ui.sessions.set(s.project_path, s));
   renderComponents();
   renderSettings();
   renderMemories();
   setEngaged(data.engaged);
   setMic(data.mic_paused);
-  setState(data.state);
-  if (data.project) setProject(data.project.name, null);
-  (data.sessions || []).forEach((s) => ui.sessions.set(s.project_path, s));
-  renderSession();
+  renderProject();
+  renderBench();
   if (data.pending_permission) showPermission(data.pending_permission);
-  const captions = $("captions");
-  captions.querySelectorAll(".turn").forEach((el) => el.remove());
+  document.querySelectorAll("#captions .turn").forEach((el) => el.remove());
   for (const turn of data.history || []) {
     const el = addTurn(turn.role === "user" ? "user" : "assistant", turn.content);
-    if (turn.role === "assistant" && turn.heard != null) el.classList.add("interrupted"); // heard is kept only when cut off
+    if (turn.role === "assistant" && turn.heard != null) el.classList.add("interrupted");
+    if (turn.role === "assistant" && turn.meta && turn.meta.route === "rejected") el.classList.add("refusal");
   }
   markLatest();
   if (data.metrics) renderSummary(data.metrics);
+  setLink();
+  renderEntityState();
   if (Object.values(ui.components).length && !Object.values(ui.components).some((c) => c.status === "loading")) {
     finishBoot();
   }
 }
 
-// A refresh (dev panel) updates the side data without touching the live conversation.
 function applyRefresh(data) {
   ui.components = data.components || ui.components;
   ui.providers = data.providers || ui.providers;
@@ -108,19 +191,23 @@ function applyRefresh(data) {
   renderComponents();
   renderMemories();
   if (data.metrics) renderSummary(data.metrics);
+  if (ui.devOpen) renderEngineering();
 }
 
 // ------------------------------------------------------------------ events
 
 function handleEvent(event) {
   const { type, data } = event;
+  countEvent(event);
+  if (type !== "audio.level") tracker.apply(event);
   logEvent(event);
   switch (type) {
-    case "state.changed":
-      setState(data.state);
-      break;
     case "audio.level":
-      orb.setLevels(data.mic || 0, data.out || 0);
+      if (entity) entity.setLevels(data.mic || 0, data.out || 0);
+      return;
+    case "state.changed":
+      if (data.state === "paused") setMic(true);
+      else if (data.previous === "paused") setMic(false);
       break;
     case "stt.partial":
       $("hearing").textContent = data.text;
@@ -135,9 +222,6 @@ function handleEvent(event) {
       addTurn("user", data.text);
       markLatest();
       break;
-    case "turn.started":
-      ui.pendingAssistant = null;
-      break;
     case "assistant.delta":
       appendAssistant(data.turn_id, data.text);
       break;
@@ -145,20 +229,11 @@ function handleEvent(event) {
       finishAssistant(data);
       break;
     case "announcement":
-      addTurn("assistant", data.text);
+      addTurn("assistant", data.text).classList.add("announcement");
       markLatest();
       break;
     case "tool.start":
-      ui.currentTool = data.action;
-      if (!QUIET_TOOLS.has(data.name)) addActivity(data.name, data.action, "running");
-      if (ui.state === "tool_execution") setStateLine(capitalize(data.action));
-      break;
-    case "tool.complete":
-      if (!QUIET_TOOLS.has(data.name)) updateActivity(data.name, data.summary, data.ok ? "done" : "failed", data.ms);
-      ui.currentTool = null;
-      break;
-    case "tool.denied":
-      updateActivity(data.name, `Not allowed: ${data.action}`, "failed");
+      if (entity && data.name === "claude.task") entity.pulse(0.8);
       break;
     case "permission.request":
       showPermission(data);
@@ -168,21 +243,38 @@ function handleEvent(event) {
       $("permission").hidden = true;
       break;
     case "coding.session":
-      ui.sessions.set(data.project_path, data);
-      renderSession();
+      onSession(data);
       break;
     case "coding.progress":
-      codingProgress(data);
+      onProgress(data);
+      break;
+    case "coding.check":
+      if (entity) entity.pulse(data.status === "failed" ? 1 : 0.6);
       break;
     case "project.active":
-      setProject(data.name, null);
+      ui.project = data.path ? { name: data.name, path: data.path } : null;
+      renderProject();
+      renderBench();
       break;
     case "system.status":
       ui.components[data.component] = { status: data.status, detail: data.detail };
       renderComponents();
+      setLink();
+      renderBench();
       break;
     case "system.ready":
       finishBoot();
+      break;
+    case "voice.changed":
+      applyVoice(data, true);
+      break;
+    case "personality.changed":
+      if (ui.voice) ui.voice.personality = data.personality;
+      renderVoices();
+      break;
+    case "providers.status":
+      ui.connectivity = data.connectivity;
+      setLink();
       break;
     case "providers.health":
       ui.providers = data.providers;
@@ -192,81 +284,43 @@ function handleEvent(event) {
       addMetrics(data);
       break;
     case "route.selected":
-      ui.lastRoute = { route: data.route, reason: data.reason, intent: data.intent };
+      ui.lastRoute = { route: data.route, reason: data.reason, category: data.category };
       break;
     case "llm.start":
       ui.lastRoute.provider = data.provider;
       ui.lastRoute.model = data.model;
+      ui.lastProvider = `${data.provider}${data.model ? ` (${data.model})` : ""}`;
       break;
     case "conversation.engaged":
       setEngaged(data.engaged);
       break;
     case "audio.mic":
       setMic(data.status === "paused");
-      if (data.status === "error") toast(`Microphone problem: ${data.error}`);
-      break;
-    case "barge_in":
-      orb.setState("interrupted");
+      if (data.status === "error") toast(`Microphone problem: ${data.error}`, true);
       break;
     case "error":
-      toast(data.message || "Something went wrong.");
+      toast(data.message || "Something failed.", true);
       break;
     case "memory.changed":
       send("snapshot");
       break;
-    case "settings.changed":
-      break;
     default:
       break;
   }
+  if (type !== "assistant.delta") renderEntityState();
 }
 
-// ------------------------------------------------------------------ state
-
-function setState(state) {
-  if (!state) return;
-  ui.state = state;
-  app.dataset.state = state;
-  orb.setState(state);
-  let text = STATE_TEXT[state] || "";
-  if (state === "tool_execution" && ui.currentTool) text = capitalize(ui.currentTool);
-  if (state === "idle") text = ui.engaged ? "Listening for you" : "Say “Sugar” to start";
-  setStateLine(text);
-  $("stopBtn").hidden = !["thinking", "tool_execution", "speaking"].includes(state);
-}
-
-function setStateLine(text) {
-  $("stateLine").textContent = text;
-}
-
-function setEngaged(engaged) {
-  ui.engaged = !!engaged;
-  $("engagement").textContent = ui.engaged ? "In conversation" : "Say “Sugar” to start";
-  if (ui.state === "idle") setState("idle");
-}
-
-function setMic(paused) {
-  $("micToggle").setAttribute("aria-pressed", paused ? "true" : "false");
-  $("micToggle").title = paused ? "Turn the microphone on (Ctrl+M)" : "Turn the microphone off (Ctrl+M)";
-  $("micLabel").textContent = paused ? "Microphone off" : "Microphone on";
-}
-
-function setProject(name) {
-  if (!name) return;
-  $("projectChip").hidden = false;
-  $("projectName").textContent = name;
-}
-
-// ------------------------------------------------------------------ captions
+// ------------------------------------------------------------------ conversation
 
 function addTurn(role, text) {
   $("captionsEmpty").hidden = true;
   const el = document.createElement("article");
   el.className = `turn ${role}`;
-  el.innerHTML = `<p class="who">${role === "user" ? "You" : "Sugar"}</p><div class="said"></div>`;
-  const said = el.querySelector(".said");
+  const said = document.createElement("div");
+  said.className = "said";
   if (role === "user") said.textContent = text;
   else said.innerHTML = renderMarkdown(text || "");
+  el.appendChild(said);
   $("captions").appendChild(el);
   scrollCaptions();
   return el;
@@ -275,8 +329,7 @@ function addTurn(role, text) {
 function appendAssistant(turnId, text) {
   let entry = ui.turns.get(turnId);
   if (!entry) {
-    const el = addTurn("assistant", "");
-    entry = { el, text: "", frame: 0 };
+    entry = { el: addTurn("assistant", ""), text: "", frame: 0 };
     ui.turns.set(turnId, entry);
     markLatest();
   }
@@ -291,30 +344,26 @@ function appendAssistant(turnId, text) {
 }
 
 function finishAssistant(data) {
-  if (data.turn_id == null) {
-    if (data.text) {
-      addTurn("assistant", data.text);
-      markLatest();
-    }
-    return;
-  }
-  const entry = ui.turns.get(data.turn_id);
-  if (!entry) {
-    if (data.text) {
-      const el = addTurn("assistant", data.text);
-      if (data.interrupted) el.classList.add("interrupted");
-    }
-  } else {
+  let el;
+  const entry = data.turn_id != null ? ui.turns.get(data.turn_id) : null;
+  if (entry) {
+    cancelAnimationFrame(entry.frame);
     entry.el.querySelector(".said").innerHTML = renderMarkdown(data.text || entry.text);
-    if (data.interrupted) entry.el.classList.add("interrupted");
+    el = entry.el;
     ui.turns.delete(data.turn_id);
+  } else if (data.text) {
+    el = addTurn("assistant", data.text);
+  }
+  if (el) {
+    if (data.interrupted) el.classList.add("interrupted");
+    if (data.route === "rejected") el.classList.add("refusal");
   }
   markLatest();
   scrollCaptions();
 }
 
 function markLatest() {
-  const turns = [...document.querySelectorAll(".turn")];
+  const turns = [...document.querySelectorAll("#captions .turn")];
   turns.forEach((t) => t.classList.remove("latest", "latest-pair"));
   const last = turns[turns.length - 1];
   if (!last) return;
@@ -333,11 +382,18 @@ function scrollCaptions() {
 $("captions").addEventListener("click", (e) => {
   const copy = e.target.closest(".copy");
   if (copy) {
-    const code = copy.parentElement.querySelector("code").textContent;
+    const code = copy.closest(".code-block").querySelector("code").textContent;
     navigator.clipboard.writeText(code).then(() => {
       copy.textContent = "Copied";
       setTimeout(() => (copy.textContent = "Copy"), 1500);
     });
+    return;
+  }
+  const expand = e.target.closest(".expand");
+  if (expand) {
+    const block = expand.closest(".code-block");
+    const collapsed = block.classList.toggle("collapsed");
+    expand.textContent = collapsed ? `Show all ${block.dataset.lines} lines` : "Collapse";
     return;
   }
   const link = e.target.closest("a[href]");
@@ -347,142 +403,222 @@ $("captions").addEventListener("click", (e) => {
   }
 });
 
-// ------------------------------------------------------------------ workbench
+// ------------------------------------------------------------------ project & workbench
 
-const activityItems = [];
-
-function addActivity(name, text, status) {
-  activityItems.unshift({ name, text, status, at: new Date() });
-  activityItems.length = Math.min(activityItems.length, 12);
-  renderActivity();
+function renderProject() {
+  const chip = $("projectChip");
+  const active = !!ui.project;
+  chip.dataset.active = String(active);
+  $("projectName").textContent = active ? ui.project.name : NO_PROJECT;
+  $("projectPath").textContent = active ? `Project directory ${ui.project.path}` : "No project selected";
+  chip.title = active ? ui.project.path : "No project selected. Say “open <project>” or name one in a request.";
+  const live = [...ui.sessions.values()].some((s) => s.status === "running");
+  $("projectDot").className = "project-dot" + (live ? " live" : "");
 }
 
-function updateActivity(name, text, status, ms) {
-  const item = activityItems.find((i) => i.name === name && i.status === "running");
-  if (item) {
-    item.text = text || item.text;
-    item.status = status;
-    item.ms = ms;
-  } else {
-    activityItems.unshift({ name, text, status, at: new Date(), ms });
-  }
-  renderActivity();
+function onSession(data) {
+  const previous = ui.sessions.get(data.project_path);
+  ui.sessions.set(data.project_path, { ...previous, ...data });
+  if (data.status === "running" && previous?.status !== "running") ui.benchPinned = null; // a new task: follow it
+  if (data.result_text && ["completed", "failed"].includes(data.status)) addTechnicalOutput(data);
+  renderProject();
+  renderBench();
 }
 
-function renderActivity() {
-  const list = $("activity");
-  list.innerHTML = "";
-  for (const item of activityItems) {
-    const li = document.createElement("li");
-    li.className = item.status;
-    const what = document.createElement("span");
-    what.className = "what";
-    what.textContent = capitalize(item.text || item.name);
-    const when = document.createElement("span");
-    when.className = "when";
-    when.textContent = item.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-    li.append(what, when);
-    list.appendChild(li);
-  }
-  $("activityEmpty").hidden = activityItems.length > 0;
-}
-
-function codingProgress(data) {
-  const session = [...ui.sessions.values()].find((s) => s.project_name === data.project);
+function onProgress(data) {
+  const session = data.project_path ? ui.sessions.get(data.project_path)
+    : [...ui.sessions.values()].find((s) => s.project_name === data.project);
   if (session && data.kind === "tool") {
     session.activity = [...(session.activity || []), data.text].slice(-8);
-    renderSession();
+    if (entity) entity.pulse(0.35);
+    renderBench();
   }
 }
 
-function renderSession() {
-  const sessions = [...ui.sessions.values()].sort((a, b) => b.last_activity - a.last_activity);
-  const container = $("session");
-  const running = sessions.some((s) => s.status === "running");
-  orb.setCoding(running);
-  const dot = $("projectDot");
-  dot.className = "project-dot" + (running ? " working" : sessions.some((s) => s.status === "waiting_permission") ? " waiting" : "");
-  if (!sessions.length) return;
-  const s = sessions[0];
-  const statusText = {
-    idle: "Connected",
-    running: "Working",
-    paused: "Paused",
-    completed: "Finished",
-    failed: "Failed",
-    cancelled: "Stopped",
-    waiting_permission: "Needs your OK",
-  }[s.status] || s.status;
-  container.innerHTML = "";
-  const head = document.createElement("div");
-  head.className = "session-head";
-  head.innerHTML = `<span class="session-project"></span><span class="session-status ${s.status}"></span>`;
-  head.querySelector(".session-project").textContent = s.project_name;
-  head.querySelector(".session-status").textContent = statusText;
-  container.appendChild(head);
-  if (s.task) {
-    const task = document.createElement("p");
-    task.className = "session-task";
-    task.textContent = s.task;
-    container.appendChild(task);
+function addTechnicalOutput(session) {
+  const turn = addTurn("assistant", "");
+  turn.classList.add("announcement");
+  const details = document.createElement("details");
+  details.className = "output";
+  const summary = document.createElement("summary");
+  summary.textContent = session.status === "failed"
+    ? `Claude Code output for ${session.project_name} (failed)`
+    : `Claude Code output for ${session.project_name}`;
+  const body = document.createElement("div");
+  body.className = "said";
+  body.innerHTML = renderMarkdown(session.result_text);
+  details.append(summary, body);
+  turn.querySelector(".said").remove();
+  turn.appendChild(details);
+  if (session.status === "failed") turn.classList.add("error");
+  markLatest();
+}
+
+function fact(list, label, value, cls) {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  if (value instanceof Node) dd.appendChild(value);
+  else dd.textContent = value;
+  if (cls) dd.className = cls;
+  list.append(dt, dd);
+}
+
+let benchTimer = 0;
+function renderBench() {
+  const view = buildWorkbench({ activeProject: ui.project, sessions: [...ui.sessions.values()],
+    claude: ui.components.claude_code });
+  const open = ui.benchPinned ?? view.expanded;
+  app.dataset.bench = open ? "open" : "rail";
+  $("benchToggle").setAttribute("aria-expanded", String(open));
+  const dot = $("benchDot");
+  dot.className = "bench-rail-dot" + (view.session?.statusKind === "live" ? " live"
+    : view.session?.statusKind === "attention" ? " attention" : view.claude.state === "linked" ? " linked" : "");
+
+  const facts = $("benchFacts");
+  facts.innerHTML = "";
+  fact(facts, "Project", view.projectLabel, view.hasProject ? "" : "muted");
+  fact(facts, "Directory", view.projectPath || "None selected", view.projectPath ? "mono" : "muted");
+  fact(facts, "Claude Code", view.claude.text, view.claude.state === "linked" ? "" : "muted");
+
+  const task = $("benchTask");
+  task.innerHTML = "";
+  clearInterval(benchTimer);
+  const s = view.session;
+  if (!s) {
+    const empty = document.createElement("p");
+    empty.className = "task-mode";
+    empty.textContent = view.hasProject ? "No task has run in this project yet."
+      : "Select a project to give Claude Code a working directory.";
+    task.appendChild(empty);
+    if (view.hasProject) task.appendChild(clearProjectButton());
+    requestAnimationFrame(alignEntity);
+    return;
   }
-  if (s.status === "running" && s.activity && s.activity.length) {
-    const steps = document.createElement("ul");
-    steps.className = "session-steps";
-    for (const line of s.activity.slice(-5)) {
+  const box = document.createElement("section");
+  box.className = `task ${s.statusKind}`;
+  const head = document.createElement("div");
+  head.className = "task-head";
+  const mode = document.createElement("span");
+  mode.className = "task-mode";
+  mode.textContent = s.foreign ? `${s.mode} in ${s.project}` : s.mode;
+  const status = document.createElement("span");
+  status.className = `task-status ${s.statusKind}`;
+  status.textContent = s.statusText;
+  head.append(mode, status);
+  box.appendChild(head);
+  if (s.task) {
+    const text = document.createElement("p");
+    text.className = "task-text";
+    text.textContent = s.task;
+    box.appendChild(text);
+  }
+  const details = document.createElement("dl");
+  details.className = "facts";
+  fact(details, "Duration", s.duration || "Not measured", s.duration ? "" : "muted");
+  fact(details, "Session", s.sessionId || "Not started", s.sessionId ? "mono" : "muted");
+  for (const check of s.checks) {
+    fact(details, check.label, `${capitalize(check.status)}: ${check.command}`, `check-${check.status}`);
+  }
+  if (!s.checks.length) fact(details, "Checks", "No tests or builds run yet", "muted");
+  fact(details, "Cost", s.cost || "Not reported", s.cost ? "" : "muted");
+  fact(details, "Tokens", s.tokens || "Not reported", s.tokens ? "" : "muted");
+  box.appendChild(details);
+  if (s.steps.length) {
+    const steps = document.createElement("ol");
+    steps.className = "steps";
+    for (const line of s.steps) {
       const li = document.createElement("li");
       li.textContent = line;
       steps.appendChild(li);
     }
-    container.appendChild(steps);
-  } else if (s.last_summary) {
+    box.appendChild(steps);
+  }
+  if (s.summary) {
     const summary = document.createElement("p");
-    summary.className = "session-summary";
-    summary.textContent = s.last_summary;
-    container.appendChild(summary);
+    summary.className = "task-summary";
+    summary.textContent = s.summary;
+    box.appendChild(summary);
+  }
+  if (s.error) {
+    const error = document.createElement("p");
+    error.className = "task-error";
+    error.textContent = s.error;
+    box.appendChild(error);
   }
   const actions = document.createElement("div");
-  actions.className = "session-actions";
-  const add = (label, action) => {
+  actions.className = "task-actions";
+  const action = (label, cmd) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "btn";
     b.textContent = label;
-    b.addEventListener("click", () => send("coding", { action }));
+    b.addEventListener("click", () => send("coding", { action: cmd }));
     actions.appendChild(b);
   };
   if (s.status === "running") {
-    add("Pause", "pause");
-    add("Stop", "stop");
-  } else if (["paused", "failed", "cancelled"].includes(s.status)) {
-    add("Resume", "resume");
+    action("Pause", "pause");
+    action("Stop", "stop");
+  } else if (["paused", "failed", "cancelled"].includes(s.status) && !s.foreign) {
+    action("Resume", "resume");
   }
-  if (actions.children.length) container.appendChild(actions);
+  if (actions.children.length) box.appendChild(actions);
+  if (s.history.length > 1) {
+    const title = document.createElement("h3");
+    title.className = "bench-subtitle";
+    title.textContent = "Earlier tasks";
+    const list = document.createElement("ol");
+    list.className = "history";
+    for (const h of s.history.slice(1)) {
+      const li = document.createElement("li");
+      const what = document.createElement("span");
+      what.className = "what";
+      what.textContent = h.task;
+      const meta = document.createElement("span");
+      meta.textContent = [capitalize(h.status), h.duration, h.cost].filter(Boolean).join(", ");
+      li.append(what, meta);
+      list.appendChild(li);
+    }
+    box.append(title, list);
+  }
+  task.appendChild(box);
+  if (view.hasProject && s.status !== "running") task.appendChild(clearProjectButton());
+  if (s.status === "running") benchTimer = setInterval(renderBench, 1000);
+  requestAnimationFrame(alignEntity);
 }
+
+function clearProjectButton() {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn";
+  b.textContent = "Clear active project";
+  b.addEventListener("click", () => send("project.clear"));
+  return b;
+}
+
+$("benchToggle").addEventListener("click", () => {
+  ui.benchPinned = app.dataset.bench !== "open";
+  renderBench();
+});
+$("projectChip").addEventListener("click", () => {
+  ui.benchPinned = true;
+  renderBench();
+});
 
 function showPermission(request) {
   $("permission").hidden = false;
   $("permission").dataset.id = request.id;
-  $("permissionText").textContent = `Sugar wants to ${request.action}.`;
+  $("permissionText").textContent = `Confirmation required: ${request.action}.`;
 }
-
 $("permissionAllow").addEventListener("click", () => send("permission", { id: $("permission").dataset.id, approved: true }));
 $("permissionDeny").addEventListener("click", () => send("permission", { id: $("permission").dataset.id, approved: false }));
 
-// ------------------------------------------------------------------ boot & health
+// ------------------------------------------------------------------ health & boot
 
 const COMPONENT_NAMES = {
-  ui: "Interface",
-  speaker: "Speaker",
-  microphone: "Microphone",
-  stt: "Speech recognition",
-  tts: "Voice",
-  projects: "Projects",
-  apps: "Apps",
-  claude_code: "Claude Code",
-  "llm:freellm": "FreeLLMAPI",
-  "llm:ollama": "Ollama (offline)",
-  "llm:claude": "Claude",
+  ui: "Interface", speaker: "Speaker", microphone: "Microphone", stt: "Speech recognition", tts: "Voice",
+  projects: "Projects", apps: "Apps", computer: "Desktop control", claude_code: "Claude Code",
+  "llm:freellm": "FreeLLMAPI", "llm:ollama": "Ollama", "llm:claude": "Claude",
 };
 
 function renderComponents() {
@@ -496,12 +632,11 @@ function renderComponents() {
     li.className = info.status;
     li.textContent = info.status === "loading" ? `${label}…` : label;
     boot.appendChild(li);
-
     const row = document.createElement("li");
     row.className = info.status;
     row.innerHTML = `<span class="dot"></span><span class="name"></span><span class="detail"></span>`;
     row.querySelector(".name").textContent = label;
-    row.querySelector(".detail").textContent = `${info.status}${info.detail ? " — " + info.detail : ""}`;
+    row.querySelector(".detail").textContent = `${info.status}${info.detail ? `: ${info.detail}` : ""}`;
     health.appendChild(row);
   }
   const providers = $("providers");
@@ -511,7 +646,7 @@ function renderComponents() {
     const ok = info.available !== undefined ? info.available : info.ok;
     row.className = ok ? "ok" : "down";
     row.innerHTML = `<span class="dot"></span><span class="name"></span><span class="detail"></span>`;
-    row.querySelector(".name").textContent = `Model: ${name}`;
+    row.querySelector(".name").textContent = `Model provider: ${name}`;
     row.querySelector(".detail").textContent = info.last_error || info.health || info.detail || (ok ? "available" : "unavailable");
     providers.appendChild(row);
   }
@@ -522,10 +657,24 @@ function finishBoot() {
   ui.ready = true;
   $("boot").classList.add("done");
   const problems = Object.entries(ui.components).filter(([, c]) => c.status === "error");
-  if (problems.length) toast(`Some parts didn't start: ${problems.map(([n]) => COMPONENT_NAMES[n] || n).join(", ")}. Details in the developer panel.`);
+  if (problems.length) {
+    toast(`Not started: ${problems.map(([n]) => COMPONENT_NAMES[n] || n).join(", ")}. Details are in telemetry.`, true);
+  }
 }
 
-// ------------------------------------------------------------------ developer panel
+// ------------------------------------------------------------------ telemetry
+
+function countEvent(event) {
+  const now = performance.now();
+  ui.eventTimes.push(now);
+  while (ui.eventTimes.length && now - ui.eventTimes[0] > 10000) ui.eventTimes.shift();
+}
+
+function eventRate() {
+  const now = performance.now();
+  while (ui.eventTimes.length && now - ui.eventTimes[0] > 10000) ui.eventTimes.shift();
+  return ui.eventTimes.length / 10;
+}
 
 function logEvent(event) {
   if (event.type === "audio.level" || event.type === "assistant.delta") return;
@@ -541,19 +690,37 @@ function renderEvents() {
   for (const event of ui.events.slice(0, 200)) {
     if (filter && !event.type.includes(filter)) continue;
     const li = document.createElement("li");
-    const time = new Date(event.ts * 1000).toLocaleTimeString([], { hour12: false });
     li.innerHTML = `<span class="time"></span><span class="type"></span><span class="data"></span>`;
-    li.querySelector(".time").textContent = time;
+    li.querySelector(".time").textContent = new Date(event.ts * 1000).toLocaleTimeString([], { hour12: false });
     li.querySelector(".type").textContent = event.type;
     li.querySelector(".data").textContent = JSON.stringify(event.data).slice(0, 300);
     list.appendChild(li);
   }
+  $("eventRate").textContent = `${eventRate().toFixed(1)} events/s over the last 10 s`;
+}
+
+function renderEngineering() {
+  const facts = $("engineeringFacts");
+  facts.innerHTML = "";
+  const claude = ui.components.claude_code;
+  const running = [...ui.sessions.values()].filter((s) => s.status === "running");
+  const view = buildWorkbench({ activeProject: ui.project, sessions: [...ui.sessions.values()], claude });
+  fact(facts, "Claude Code", claude ? `${claude.status}${claude.detail ? `: ${claude.detail}` : ""}` : "Not checked yet");
+  fact(facts, "Process", running.length ? `Running for ${running.map((s) => s.project_name).join(", ")}` : "No process running");
+  fact(facts, "Project", view.projectLabel);
+  fact(facts, "Session", view.session?.sessionId || "None", view.session?.sessionId ? "mono" : "muted");
+  fact(facts, "Task status", view.session ? view.session.statusText : "No task", view.session ? "" : "muted");
+  fact(facts, "Last provider", ui.lastProvider || "None used yet", ui.lastProvider ? "" : "muted");
+  fact(facts, "Last route", ui.lastRoute.route ? `${ui.lastRoute.route}${ui.lastRoute.reason ? ` (${ui.lastRoute.reason})` : ""}` : "None yet");
+  fact(facts, "Event bus", `${eventRate().toFixed(1)} events/s`);
+  const info = entity ? entity.info() : null;
+  fact(facts, "Entity", info ? `${info.backend}, ${info.fps || 0} fps, ${info.points} particles${info.running ? "" : ", paused"}` : "Not running");
 }
 
 function addMetrics(record) {
   ui.metrics.unshift({ ...record, route: { ...ui.lastRoute } });
   ui.metrics.length = Math.min(ui.metrics.length, 15);
-  renderMetrics();
+  if (ui.devOpen) renderMetrics();
 }
 
 function cell(ms, slow, verySlow) {
@@ -570,50 +737,47 @@ function renderMetrics() {
     const metrics = m.metrics || {};
     const info = m.info || {};
     const tr = document.createElement("tr");
-    tr.innerHTML =
-      `<td>${m.turn_id}</td><td></td><td></td>` +
-      cell(metrics.endpoint_ms, 600, 1200) +
-      cell(metrics.stt_wait_ms, 300, 800) +
-      cell(metrics.llm_ttft_ms, 1500, 3000) +
-      cell(metrics.tts_first_audio_ms, 300, 800) +
+    tr.innerHTML = `<td></td><td></td><td></td>` + cell(metrics.endpoint_ms, 600, 1200) + cell(metrics.stt_wait_ms, 300, 800) +
+      cell(metrics.llm_ttft_ms, 1500, 3000) + cell(metrics.tts_first_audio_ms, 300, 800) +
       cell(metrics.voice_to_voice_ms ?? metrics.text_to_voice_ms, 2000, 4000);
-    tr.children[1].textContent = info.route || m.route.route || "—";
+    tr.children[0].textContent = m.turn_id;
+    tr.children[1].textContent = info.category || info.route || m.route.route || "—";
     tr.children[2].textContent = info.model || m.route.model || "—";
     body.appendChild(tr);
   }
   const last = ui.metrics[0];
   const box = $("lastTurn");
   box.innerHTML = "";
-  if (last) {
-    const fields = {
-      Route: (last.info && last.info.route) || last.route.route,
-      Reason: last.route.reason,
-      Provider: last.route.provider,
-      Model: (last.info && last.info.model) || last.route.model,
-      Tools: (last.info && last.info.tools || []).join(", ") || "none",
-      Interrupted: last.info && last.info.interrupted ? "yes" : "no",
-    };
-    for (const [k, v] of Object.entries(fields)) {
-      const div = document.createElement("div");
-      div.innerHTML = `<span></span><strong></strong>`;
-      div.querySelector("span").textContent = k;
-      div.querySelector("strong").textContent = v || "—";
-      box.appendChild(div);
-    }
+  if (!last) return;
+  const fields = {
+    Route: (last.info && last.info.route) || last.route.route,
+    Category: last.info && last.info.category,
+    Reason: last.route.reason,
+    Provider: last.route.provider,
+    Model: (last.info && last.info.model) || last.route.model,
+    Tools: (last.info && last.info.tools || []).join(", ") || "none",
+    Interrupted: last.info && last.info.interrupted ? "yes" : "no",
+  };
+  for (const [k, v] of Object.entries(fields)) {
+    const div = document.createElement("div");
+    div.innerHTML = `<span></span><strong></strong>`;
+    div.querySelector("span").textContent = k;
+    div.querySelector("strong").textContent = v || "—";
+    box.appendChild(div);
   }
 }
 
 function renderSummary(summary) {
   const box = $("metricsSummary");
   box.innerHTML = "";
-  const labels = { voice_to_voice_ms: "Voice to voice", llm_ttft_ms: "First token", stt_wait_ms: "STT wait",
-    tts_first_audio_ms: "First audio", endpoint_ms: "End of speech", interrupt_ms: "Interruption" };
+  const labels = { voice_to_voice_ms: "End to end", llm_ttft_ms: "LLM first token", stt_wait_ms: "STT",
+    tts_first_audio_ms: "TTS first audio", endpoint_ms: "End of speech", interrupt_ms: "Interruption" };
   for (const [key, label] of Object.entries(labels)) {
     const s = summary[key];
     if (!s) continue;
     const div = document.createElement("div");
-    div.innerHTML = `<span></span> <strong></strong>`;
-    div.querySelector("span").textContent = `${label} (p50 / p90, n=${s.count})`;
+    div.innerHTML = `<span></span><strong></strong>`;
+    div.querySelector("span").textContent = `${label}, p50 / p90 over ${s.count}`;
     div.querySelector("strong").textContent = `${Math.round(s.p50)} / ${Math.round(s.p90)} ms`;
     box.appendChild(div);
   }
@@ -623,7 +787,7 @@ function renderMemories() {
   const list = $("memories");
   list.innerHTML = "";
   if (!ui.memories.length) {
-    list.innerHTML = `<li><span class="scope">Nothing remembered yet. Say “remember that…”.</span></li>`;
+    list.innerHTML = `<li><span class="scope">Nothing remembered. Say “remember that this project uses pnpm”.</span></li>`;
     return;
   }
   for (const m of ui.memories) {
@@ -639,14 +803,21 @@ function renderMemories() {
   }
 }
 
+let devTimer = 0;
 function openDev(open) {
   ui.devOpen = open;
   $("devPanel").hidden = !open;
   $("devToggle").setAttribute("aria-expanded", String(open));
+  clearInterval(devTimer);
   if (open) {
     renderEvents();
     renderMetrics();
+    renderEngineering();
     send("snapshot");
+    devTimer = setInterval(() => {
+      renderEngineering();
+      $("eventRate").textContent = `${eventRate().toFixed(1)} events/s over the last 10 s`;
+    }, 1000);
   }
 }
 
@@ -660,6 +831,87 @@ document.querySelectorAll(".tab").forEach((tab) =>
   })
 );
 
+// ------------------------------------------------------------------ telemetry history
+
+function historyRange() {
+  const from = $("histFrom").value ? new Date($("histFrom").value).getTime() / 1000 : null;
+  const to = $("histTo").value ? new Date($("histTo").value).getTime() / 1000 + 86400 : null;
+  return { since: from, until: to };
+}
+
+async function renderHistory() {
+  const reply = await request("telemetry.history", historyRange());
+  if (!reply || !reply.ok) {
+    $("histNote").textContent = reply ? reply.error : "Not connected.";
+    return;
+  }
+  const history = reply.history;
+  const metric = $("histMetric").value;
+  const series = history.series[metric] || [];
+  const chart = $("histChart");
+  chart.innerHTML = "";
+  if (series.length) {
+    const max = Math.max(...series.map((p) => p.p50)) || 1;
+    const step = series.length > 1 ? 580 / (series.length - 1) : 0;
+    const points = series.map((p, i) => [10 + i * step, 150 - (p.p50 / max) * 130]);
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+    line.setAttribute("points", points.map((xy) => xy.join(",")).join(" "));
+    line.setAttribute("class", "history-line");
+    chart.appendChild(line);
+    points.forEach(([x, y], i) => {
+      const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("r", 3);
+      dot.setAttribute("class", "history-dot");
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${series[i].day}: ${series[i].p50} ms median over ${series[i].n} turns`;
+      dot.appendChild(title);
+      chart.appendChild(dot);
+    });
+  }
+  $("histNote").textContent = series.length
+    ? `${series[0].day} to ${series[series.length - 1].day}: daily median, peak ${Math.max(...series.map((p) => p.p50))} ms. `
+      + `${history.measurements} measurements, ${history.events} events, kept ${history.retention_days} days.`
+    : `No ${metric} measurements in this range yet. History keeps ${history.retention_days} days.`;
+  const body = $("histProviders").querySelector("tbody");
+  body.innerHTML = "";
+  for (const row of history.providers) {
+    const tr = document.createElement("tr");
+    for (const value of [row.provider, row.answers, row.failures, row.ttft_p50 == null ? "—" : `${row.ttft_p50} ms`]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  const errors = $("histErrors");
+  errors.innerHTML = "";
+  for (const e of history.errors.slice(-15).reverse()) {
+    const li = document.createElement("li");
+    li.className = "error";
+    li.innerHTML = `<span class="dot"></span><span class="name"></span><span class="detail"></span>`;
+    li.querySelector(".name").textContent = new Date(e.ts * 1000).toLocaleString();
+    li.querySelector(".detail").textContent = `${e.kind.replace("_", " ")}: ${e.name || ""} ${e.status || ""}`;
+    errors.appendChild(li);
+  }
+}
+
+async function exportHistory(format) {
+  const reply = await request("telemetry.export", { format, ...historyRange() });
+  if (!reply || !reply.ok) return toast(reply ? reply.error : "Not connected.", true);
+  const blob = new Blob([reply.content], { type: format === "csv" ? "text/csv" : "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = reply.filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+$("histRefresh").addEventListener("click", renderHistory);
+$("histMetric").addEventListener("change", renderHistory);
+$("histCsv").addEventListener("click", () => exportHistory("csv"));
+$("histJson").addEventListener("click", () => exportHistory("json"));
+document.querySelector('.tab[data-tab="history"]').addEventListener("click", renderHistory);
+
 // ------------------------------------------------------------------ settings
 
 function renderSettings() {
@@ -672,6 +924,47 @@ function renderSettings() {
   $("patience").value = s.vad.endpoint_default_ms;
   $("patienceValue").textContent = `${s.vad.endpoint_default_ms} ms`;
   document.querySelectorAll('input[name="engagement"]').forEach((r) => (r.checked = r.value === s.conversation.engagement));
+  renderVoices();
+}
+
+// The active voice identity is the single source of the entity's palette and the UI accents.
+function applyVoice(voice, animate = true) {
+  if (!voice) return;
+  ui.voice = voice;
+  if (entity && entity.setPalette) entity.setPalette(voice.palette, animate ? 800 : 0);
+  const root = document.documentElement.style;
+  const [body, highlight, , warning] = voice.palette;
+  root.setProperty("--amber", body);
+  root.setProperty("--gold", highlight);
+  if (warning) root.setProperty("--signal", warning);
+  renderVoices();
+}
+
+function renderVoices() {
+  const list = $("voiceList");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const v of ui.voiceIdentities || []) {
+    const label = document.createElement("label");
+    label.className = "radio";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "voiceIdentity";
+    input.value = v.id;
+    input.checked = ui.voice ? ui.voice.id === v.id : false;
+    input.addEventListener("change", () => send("voice.set", { voice: v.id }));
+    const swatch = document.createElement("span");
+    swatch.className = "swatch";
+    swatch.style.background = v.palette[0];
+    label.append(input, swatch, document.createTextNode(` ${v.name}`));
+    list.appendChild(label);
+  }
+  const select = $("personality");
+  if (select && ui.personalities && !select.options.length) {
+    for (const p of ui.personalities) select.add(new Option(p.name, p.id));
+    select.addEventListener("change", () => send("personality.set", { personality: select.value }));
+  }
+  if (select && ui.voice) select.value = ui.voice.personality || "sid";
 }
 
 function bindSetting(id, key, format) {
@@ -683,11 +976,10 @@ bindSetting("speed", "tts.speed", (v) => `${Number(v).toFixed(2)}×`);
 bindSetting("sensitivity", "vad.threshold", (v) => Number(v).toFixed(2));
 bindSetting("patience", "vad.endpoint_default_ms", (v) => `${v} ms`);
 document.querySelectorAll('input[name="engagement"]').forEach((r) =>
-  r.addEventListener("change", () => send("setting", { key: "conversation.engagement", value: r.value }))
-);
+  r.addEventListener("change", () => send("setting", { key: "conversation.engagement", value: r.value })));
 $("newConversation").addEventListener("click", () => {
   send("new_conversation");
-  document.querySelectorAll(".turn").forEach((t) => t.remove());
+  document.querySelectorAll("#captions .turn").forEach((t) => t.remove());
   $("captionsEmpty").hidden = false;
 });
 $("settingsToggle").addEventListener("click", () => {
@@ -697,6 +989,20 @@ $("settingsToggle").addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------------ input
+
+function setEngaged(engaged) {
+  ui.engaged = !!engaged;
+  $("engagement").textContent = ui.micPaused ? "Microphone off. Type to SID"
+    : ui.engaged ? "Listening without the wake word" : "Say “Hey SID” or type";
+}
+
+function setMic(paused) {
+  ui.micPaused = !!paused;
+  $("micToggle").setAttribute("aria-pressed", paused ? "true" : "false");
+  $("micToggle").title = paused ? "Turn the microphone on (Ctrl+M)" : "Turn the microphone off (Ctrl+M)";
+  $("micLabel").textContent = paused ? "Microphone off" : "Microphone on";
+  setEngaged(ui.engaged);
+}
 
 $("composer").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -724,13 +1030,20 @@ document.addEventListener("keydown", (e) => {
     $("micToggle").click();
   }
 });
+$("stage").addEventListener("click", (e) => {
+  if (e.target === $("entity") || e.target.classList.contains("presence")) {
+    if (entity) entity.pulse(0.6);
+    $("input").focus();
+  }
+});
 
 // ------------------------------------------------------------------ helpers
 
 let toastTimer = 0;
-function toast(text) {
+function toast(text, fault = false) {
   const el = $("toast");
   el.textContent = text;
+  el.classList.toggle("fault", fault);
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), 6000);
@@ -740,4 +1053,25 @@ function capitalize(text) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
+// Diagnostics for automated UI checks (read-only views of real state).
+window.__sid = {
+  entity: () => (entity ? entity.info() : null),
+  state: () => tracker.snapshot(),
+  bench: () => ({ mode: app.dataset.bench, project: $("projectName").textContent, ...buildWorkbench({
+    activeProject: ui.project, sessions: [...ui.sessions.values()], claude: ui.components.claude_code }) }),
+  status: () => $("status").textContent,
+  history: (since, until) => request("telemetry.history", { since, until }),
+  voice: () => ui.voice || null,
+  accent: () => getComputedStyle(document.documentElement).getPropertyValue("--amber").trim(),
+};
+
+new ResizeObserver(() => alignEntity()).observe(document.querySelector(".presence"));
+createEntity().then((created) => {
+  entity = created;
+  if (ui.voice && entity.setPalette) entity.setPalette(ui.voice.palette, 0);
+  alignEntity();
+  renderEntityState();
+});
+renderProject();
+renderBench();
 connect();

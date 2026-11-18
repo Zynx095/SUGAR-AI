@@ -11,7 +11,7 @@ Claude Code. Verified against Claude Code 2.1.x:
   (thinking / text / tool_use blocks), ``user`` (tool results),
   ``rate_limit_event`` and a final ``result`` (``is_error``, ``result``,
   ``session_id``, ``total_cost_usd``, ``num_turns``, ``permission_denials``).
-* ``--resume <session_id>`` continues a conversation; that is how Sugar
+* ``--resume <session_id>`` continues a conversation; that is how SID
   pauses and resumes coding sessions across runs and restarts.
 
 Supported flags and permission modes are probed from ``claude --help`` so
@@ -216,6 +216,15 @@ def parse_stream_line(line: str) -> list[ClaudeEvent]:
 # --------------------------------------------------------------------------- runner
 
 
+def _usage(raw: Any) -> dict[str, int] | None:
+    """Token counts from a ``result`` event — only the integer fields the CLI actually sent."""
+    if not isinstance(raw, dict):
+        return None
+    keys = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    usage = {k: int(raw[k]) for k in keys if isinstance(raw.get(k), int | float)}
+    return usage or None
+
+
 @dataclass
 class ClaudeRunRequest:
     prompt: str
@@ -249,15 +258,19 @@ class ClaudeRunResult:
     cancelled: bool = False
     stderr_tail: str = ""
     model: str | None = None
+    usage: dict[str, int] | None = None  # token counts, only when the CLI reported them
+    timed_out: bool = False
 
 
 class ClaudeCodeRunner:
     """Runs one ``claude -p`` invocation and streams its events."""
 
-    def __init__(self, info: ClaudeCLIInfo) -> None:
+    def __init__(self, info: ClaudeCLIInfo, timeout_s: float | None = None) -> None:
         self.info = info
+        self.timeout_s = timeout_s
         self._process: asyncio.subprocess.Process | None = None
         self._cancel_requested = False
+        self._timed_out = False
 
     @property
     def running(self) -> bool:
@@ -299,6 +312,10 @@ class ClaudeCodeRunner:
             args += ["--allowedTools", *request.allowed_tools]
         if request.disallowed_tools:
             args += ["--disallowedTools", *request.disallowed_tools]
+        if info.executable.lower().endswith((".cmd", ".bat")):
+            # cmd.exe ends an argument list at the first newline (npm installs claude as claude.cmd), which
+            # would silently drop the system prompt's tail and every tool rule after it.
+            args = [arg.replace("\r\n", " ").replace("\n", " ") for arg in args]
         return args
 
     async def run(
@@ -327,6 +344,18 @@ class ClaudeCodeRunner:
             return ClaudeRunResult(ok=False, error=f"could not start Claude Code: {exc}")
         self._process = process
         self._cancel_requested = False
+        self._timed_out = False
+        watchdog: asyncio.TimerHandle | None = None
+        if self.timeout_s:
+            loop = asyncio.get_running_loop()
+
+            def expire() -> None:
+                if process.returncode is None:
+                    log.warning("Claude Code exceeded %.0f s; stopping it", self.timeout_s)
+                    self._timed_out = True
+                    asyncio.ensure_future(kill_process_tree(process))
+
+            watchdog = loop.call_later(self.timeout_s, expire)
 
         stderr_chunks: list[str] = []
 
@@ -375,6 +404,7 @@ class ClaudeCodeRunner:
                             permission_denials=list(data.get("permission_denials") or []),
                             error=(str(data.get("result") or data.get("subtype")) if is_error else None),
                             model=model,
+                            usage=_usage(data.get("usage")),
                         )
                     if on_event is not None:
                         outcome = on_event(event)
@@ -387,11 +417,17 @@ class ClaudeCodeRunner:
             raise
         finally:
             self._process = None
+            if watchdog is not None:
+                watchdog.cancel()
         await asyncio.gather(stderr_task, return_exceptions=True)
         stderr_tail = "".join(stderr_chunks)[-2000:]
 
         if result is None:
-            if self._cancel_requested:
+            if self._timed_out:
+                minutes = (self.timeout_s or 0) / 60
+                result = ClaudeRunResult(ok=False, text="\n".join(texts), session_id=session_id,
+                                         error=f"timed out after {minutes:.0f} minutes", timed_out=True, model=model)
+            elif self._cancel_requested:
                 result = ClaudeRunResult(ok=False, text="\n".join(texts), session_id=session_id,
                                          error="cancelled", cancelled=True, model=model)
             else:

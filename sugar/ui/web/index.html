@@ -3,133 +3,175 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sugar</title>
+  <title>SID</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app" id="app" data-state="idle">
+  <div class="app" id="app" data-entity="offline" data-bench="rail">
     <header class="topbar">
-      <div class="mark" aria-label="Sugar">sugar<span class="mark-grain" aria-hidden="true"></span></div>
+      <div class="wordmark" aria-label="SID">SID</div>
 
-      <div class="topbar-middle">
-        <button class="project-chip" id="projectChip" type="button" hidden>
-          <span class="project-dot" id="projectDot" aria-hidden="true"></span>
-          <span id="projectName"></span>
-        </button>
-        <span class="engagement" id="engagement">Say “Sugar” to start</span>
-      </div>
+      <button class="project" id="projectChip" type="button" title="Active project — click to clear" aria-describedby="projectPath">
+        <span class="project-dot" id="projectDot" aria-hidden="true"></span>
+        <span class="project-name" id="projectName">NO ACTIVE PROJECT</span>
+      </button>
+      <span class="sr-only" id="projectPath"></span>
 
-      <nav class="topbar-actions" aria-label="Controls">
+      <div class="topbar-end">
+        <span class="link" id="link" data-state="offline" role="status">
+          <span class="link-dot" aria-hidden="true"></span><span id="linkText">Connecting</span>
+        </span>
         <button class="icon-btn" id="micToggle" type="button" aria-pressed="false" title="Turn the microphone off (Ctrl+M)">
           <svg class="icon icon-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
           <svg class="icon icon-mic-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 9.5V6a3 3 0 0 0-5.6-1.5M9 9v2a3 3 0 0 0 4.7 2.5M5.5 11a6.5 6.5 0 0 0 10.4 5.2M18.5 11a6.4 6.4 0 0 1-.6 2.7M12 17.5V21M4 4l16 16"/></svg>
           <span class="sr-only" id="micLabel">Microphone on</span>
         </button>
-        <button class="icon-btn" id="settingsToggle" type="button" aria-expanded="false" title="Voice settings">
+        <button class="icon-btn" id="settingsToggle" type="button" aria-expanded="false" aria-controls="settingsPanel" title="Voice and listening settings">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-          <span class="sr-only">Voice settings</span>
+          <span class="sr-only">Settings</span>
         </button>
-        <button class="icon-btn" id="devToggle" type="button" aria-expanded="false" title="Developer panel (`)">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg>
-          <span class="sr-only">Developer panel</span>
+        <button class="icon-btn" id="devToggle" type="button" aria-expanded="false" aria-controls="devPanel" title="Developer telemetry (`)">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg>
+          <span class="sr-only">Developer telemetry</span>
         </button>
-      </nav>
+      </div>
     </header>
 
-    <main class="stage">
-      <section class="presence" aria-label="Sugar status">
-        <canvas id="orb" aria-hidden="true"></canvas>
-        <p class="state-line" id="stateLine" aria-live="polite">Waking up</p>
+    <main class="stage" id="stage">
+      <canvas id="entity" aria-hidden="true"></canvas>
+
+      <section class="transcript" aria-label="Conversation">
+        <div class="transcript-scroll" id="captions" tabindex="0">
+          <p class="transcript-empty" id="captionsEmpty">Ask a question, start a story, or name a project and the change you want.</p>
+        </div>
+      </section>
+
+      <section class="presence" aria-label="SID status">
+        <p class="status" id="status" aria-live="polite">Connecting</p>
         <p class="hearing" id="hearing" aria-live="polite"></p>
+
+        <section class="permission" id="permission" hidden aria-live="assertive">
+          <p class="permission-text" id="permissionText"></p>
+          <div class="permission-actions">
+            <button type="button" class="btn btn-primary" id="permissionAllow">Proceed</button>
+            <button type="button" class="btn" id="permissionDeny">Cancel</button>
+          </div>
+        </section>
+
+        <form class="composer" id="composer" autocomplete="off">
+          <label class="sr-only" for="input">Message SID</label>
+          <input id="input" type="text" placeholder="Ask anything, or tell SID what to do" spellcheck="true">
+          <button type="button" class="stop-btn" id="stopBtn" hidden>Stop</button>
+        </form>
+        <p class="engagement" id="engagement">Say “Hey SID” or type</p>
       </section>
 
-      <section class="captions" id="captions" aria-label="Conversation">
-        <p class="captions-empty" id="captionsEmpty">Talk to Sugar, or type below. Try “open my projects” or “what’s the weather”.</p>
-      </section>
-
-      <form class="composer" id="composer" autocomplete="off">
-        <label class="sr-only" for="input">Message Sugar</label>
-        <input id="input" type="text" placeholder="Type to Sugar" spellcheck="true">
-        <button type="button" class="stop-btn" id="stopBtn" hidden>Stop</button>
-      </form>
+      <aside class="bench" id="bench" aria-label="Engineering workbench">
+        <button class="bench-rail" id="benchToggle" type="button" aria-expanded="false" aria-controls="benchBody" title="Engineering workbench">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg>
+          <span class="bench-rail-dot" id="benchDot" aria-hidden="true"></span>
+          <span class="sr-only">Engineering workbench</span>
+        </button>
+        <div class="bench-body" id="benchBody">
+          <h2 class="bench-title">Workbench</h2>
+          <dl class="facts" id="benchFacts"></dl>
+          <div id="benchTask"></div>
+        </div>
+      </aside>
     </main>
 
-    <aside class="workbench" id="workbench" aria-label="Work in progress">
-      <section class="permission" id="permission" hidden>
-        <p class="permission-text" id="permissionText"></p>
-        <div class="permission-actions">
-          <button type="button" class="btn btn-primary" id="permissionAllow">Allow</button>
-          <button type="button" class="btn" id="permissionDeny">Don’t</button>
-        </div>
-      </section>
-
-      <section class="bench-section" id="sessionSection">
-        <h2 class="bench-title">Claude Code</h2>
-        <div class="session" id="session">
-          <p class="bench-empty">No coding session yet. Say “open my project” to connect one.</p>
-        </div>
-      </section>
-
-      <section class="bench-section">
-        <h2 class="bench-title">Recent actions</h2>
-        <ol class="activity" id="activity"></ol>
-        <p class="bench-empty" id="activityEmpty">Nothing yet.</p>
-      </section>
-    </aside>
-
     <div class="sheet settings" id="settingsPanel" hidden>
-      <h2 class="sheet-title">Voice</h2>
+      <h2 class="sheet-title">Voice and listening</h2>
+      <fieldset class="field">
+        <legend>Voice</legend>
+        <div id="voiceList"></div>
+      </fieldset>
       <label class="field">
-        <span>Speaking speed <output id="speedValue"></output></span>
-        <input type="range" id="speed" min="0.7" max="1.5" step="0.05">
+        <span>Personality</span>
+        <select id="personality"></select>
+      </label>
+      <label class="field">
+        <span>Speaking rate <output id="speedValue"></output></span>
+        <input type="range" id="speed" min="0.75" max="1.3" step="0.01">
       </label>
       <label class="field">
         <span>Speech sensitivity <output id="sensitivityValue"></output></span>
         <input type="range" id="sensitivity" min="0.3" max="0.8" step="0.05">
-        <small>Lower picks up quieter voices; higher ignores more background noise.</small>
+        <small>Lower hears quieter voices; higher ignores more background noise.</small>
       </label>
       <label class="field">
         <span>Pause before replying <output id="patienceValue"></output></span>
         <input type="range" id="patience" min="450" max="1500" step="50">
       </label>
       <fieldset class="field">
-        <legend>When to listen</legend>
-        <label class="radio"><input type="radio" name="engagement" value="wake_word"> After I say “Sugar”</label>
-        <label class="radio"><input type="radio" name="engagement" value="always"> Always (no wake word)</label>
+        <legend>Listening</legend>
+        <label class="radio"><input type="radio" name="engagement" value="wake_word"> After “Hey SID”</label>
+        <label class="radio"><input type="radio" name="engagement" value="always"> Always</label>
       </fieldset>
       <button type="button" class="btn" id="newConversation">Start a new conversation</button>
     </div>
 
     <div class="dev" id="devPanel" hidden>
       <div class="dev-head">
-        <h2 class="sheet-title">Developer</h2>
+        <h2 class="sheet-title">Telemetry</h2>
         <div class="tabs" role="tablist">
           <button role="tab" type="button" class="tab" data-tab="latency" aria-selected="true">Latency</button>
+          <button role="tab" type="button" class="tab" data-tab="engineering" aria-selected="false">Engineering</button>
           <button role="tab" type="button" class="tab" data-tab="health" aria-selected="false">Health</button>
           <button role="tab" type="button" class="tab" data-tab="events" aria-selected="false">Events</button>
+          <button role="tab" type="button" class="tab" data-tab="history" aria-selected="false">History</button>
           <button role="tab" type="button" class="tab" data-tab="memory" aria-selected="false">Memory</button>
         </div>
         <button type="button" class="icon-btn" id="devClose" title="Close">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          <span class="sr-only">Close developer panel</span>
+          <span class="sr-only">Close telemetry</span>
         </button>
       </div>
       <div class="dev-body">
         <section class="tab-panel" data-panel="latency">
           <div class="last-turn" id="lastTurn"></div>
           <table class="metrics" id="metricsTable">
-            <thead><tr><th>Turn</th><th>Route</th><th>Model</th><th>End of speech</th><th>STT wait</th><th>First token</th><th>First audio</th><th>Voice to voice</th></tr></thead>
+            <thead><tr><th>Turn</th><th>Route</th><th>Model</th><th>End of speech</th><th>STT</th><th>LLM first token</th><th>TTS first audio</th><th>End to end</th></tr></thead>
             <tbody></tbody>
           </table>
           <div class="summary" id="metricsSummary"></div>
+        </section>
+        <section class="tab-panel" data-panel="engineering" hidden>
+          <dl class="facts" id="engineeringFacts"></dl>
         </section>
         <section class="tab-panel" data-panel="health" hidden>
           <ul class="health" id="health"></ul>
           <ul class="health" id="providers"></ul>
         </section>
         <section class="tab-panel" data-panel="events" hidden>
-          <label class="filter"><span>Filter</span><input id="eventFilter" type="text" placeholder="e.g. stt or tool"></label>
+          <div class="events-head">
+            <label class="filter"><span>Filter</span><input id="eventFilter" type="text" placeholder="e.g. coding or stt"></label>
+            <span class="event-rate" id="eventRate"></span>
+          </div>
           <ol class="events" id="events"></ol>
+        </section>
+        <section class="tab-panel" data-panel="history" hidden>
+          <div class="history-controls">
+            <label>From <input type="date" id="histFrom"></label>
+            <label>To <input type="date" id="histTo"></label>
+            <label>Metric <select id="histMetric">
+              <option value="llm_ttft_ms">LLM first token</option>
+              <option value="tts_first_audio_ms">TTS first audio</option>
+              <option value="stt_wait_ms">STT</option>
+              <option value="voice_to_voice_ms">End to end (voice)</option>
+              <option value="text_to_voice_ms">End to end (typed)</option>
+              <option value="endpoint_ms">End of speech</option>
+            </select></label>
+            <button type="button" class="btn" id="histRefresh">Show</button>
+            <button type="button" class="btn" id="histCsv">Export CSV</button>
+            <button type="button" class="btn" id="histJson">Export JSON</button>
+          </div>
+          <svg class="history-chart" id="histChart" viewBox="0 0 600 160" preserveAspectRatio="none" role="img"
+               aria-label="Daily median of the selected metric"></svg>
+          <p class="history-note" id="histNote"></p>
+          <table class="metrics" id="histProviders"><thead><tr><th>Provider</th><th>Answers</th><th>Failures</th>
+            <th>First token p50</th></tr></thead><tbody></tbody></table>
+          <ul class="health" id="histErrors"></ul>
         </section>
         <section class="tab-panel" data-panel="memory" hidden>
           <ul class="memories" id="memories"></ul>
@@ -138,7 +180,7 @@
     </div>
 
     <div class="boot" id="boot">
-      <p class="boot-title">Sugar is waking up</p>
+      <p class="boot-title">SID is starting</p>
       <ul class="boot-list" id="bootList"></ul>
     </div>
 

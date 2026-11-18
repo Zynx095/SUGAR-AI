@@ -1,0 +1,15 @@
+#!/bin/sh
+# SID pre-commit check: lint + UI unit tests + the fast safety/routing tests (about 15 s).
+# The full suite runs in CI and before releases: venv/Scripts/python.exe -m pytest --ignore=tests/test_desktop_live.py
+# Skip once with: git commit --no-verify
+PY=venv/Scripts/python.exe
+[ -x "$PY" ] || PY=python
+echo "pre-commit: ruff"
+"$PY" -m ruff check sugar tests tools || exit 1
+if command -v node >/dev/null 2>&1; then
+  echo "pre-commit: UI unit tests"
+  node --test tests/ui/*.test.mjs > /dev/null || { node --test tests/ui/*.test.mjs; exit 1; }
+fi
+echo "pre-commit: fast tests"
+"$PY" -m pytest -q -x -p no:cacheprovider tests/test_security.py tests/test_router.py tests/test_universal.py \
+  tests/test_engineering_boundary.py tests/test_streaming.py tests/test_voice_profile.py tests/test_telemetry.py || exit 1

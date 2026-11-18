@@ -2,8 +2,11 @@
 
 Start-up is progressive: the UI and the text path are available within a
 second, while Whisper and MeloTTS load in background threads (the UI shows
-each component's status). If a component fails, Sugar keeps running without
+each component's status). If a component fails, SID keeps running without
 it and says so — no silent failure, no crash.
+
+SID starts with no active project, whatever was active last time: the user
+selects one (or names one in a request) before Claude Code touches a repository.
 """
 
 from __future__ import annotations
@@ -17,6 +20,9 @@ from typing import Any
 from sugar.agent.executor import ToolExecutor
 from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
+from sugar.app.self_tools import register_self_tools, voice_state
+from sugar.audio.voice_profile import PROFILES as VOICE_PROFILES
+from sugar.audio.voices import IDENTITIES, describe
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
 from sugar.computer import ComputerControl
@@ -32,26 +38,29 @@ from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.conversation import ConversationManager
 from sugar.intelligence.fastpath import DesktopView, FastPath
 from sugar.intelligence.orchestrator import Orchestrator
+from sugar.intelligence.personality import PERSONALITIES
 from sugar.intelligence.router import Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.memory.store import MemoryStore
 from sugar.providers import build_provider_pool
+from sugar.providers.routing import ProviderRouter
 from sugar.tools import build_registry
 from sugar.tools.calculator import evaluate_spoken_math
 from sugar.tools.services import ToolServices
 
 log = logging.getLogger(__name__)
 
-PREWARM_PHRASES = ["Yeah?", "Done.", "Stopped.", "Standing by.", "On it.", "Typing.", "Let me think about that.",
-                   "Okay, I won't.", "Mic's off.", "Got it, I'll remember that."]
+PREWARM_PHRASES = ["Yes?", "Done.", "Stopped.", "Standing by.", "Acknowledged.", "Understood. I won't.",
+                   "Microphone off.", "Ready. Name the engineering task.",
+                   "I'm designed for software engineering and development. I can't assist with that request."]
 LIVE_SETTINGS = {
     "tts.speed", "tts.voice", "tts.volume", "vad.threshold", "vad.endpoint_default_ms", "vad.endpoint_complete_ms",
     "vad.endpoint_incomplete_ms", "conversation.engagement", "conversation.engagement_timeout_s",
-    "permissions.auto_approve_level", "ui.developer_mode", "stt.partials",
+    "permissions.auto_approve_level", "ui.developer_mode", "stt.partials", "tts.voice_profile",
 }
 
 
-class SugarApp:
+class SIDApp:
     def __init__(self, settings: Settings, *, voice: bool = True) -> None:
         self.settings = settings
         self.voice_enabled = voice
@@ -59,6 +68,12 @@ class SugarApp:
         self.state = StateMachine(self.bus)
         data = settings.paths.data_dir
         self.metrics = MetricsRecorder(self.bus, data / "metrics")
+        self.telemetry = None
+        if settings.telemetry.enabled:
+            from sugar.core.telemetry import TelemetryStore
+
+            self.telemetry = TelemetryStore(data / "telemetry.db", settings.telemetry.retention_days)
+            self.telemetry.attach(self.bus)
         self.memory = MemoryStore(data / "sugar.db")
         self.working = WorkingMemory.load(data / "working.json")
         self.projects = ProjectRegistry(settings.coding.project_roots, data / "projects.json",
@@ -69,6 +84,10 @@ class SugarApp:
         self.computer = ComputerControl(settings, self.apps, self.spotify)
         self.shared_state: dict[str, Any] = {}
         self.pool = build_provider_pool(settings, self.bus)
+        from sugar.providers.ollama_server import OllamaServer
+
+        self.ollama_server = OllamaServer(settings.llm.ollama.base_url, settings.llm.ollama.executable,
+                                          settings.llm.ollama.models_dir)
 
         self.services = ToolServices(settings, self.bus, self.apps, self.projects, self.sessions, self.memory,
                                      self.working, self.spotify, self.computer, data, self.shared_state)
@@ -77,7 +96,9 @@ class SugarApp:
         self.executor = ToolExecutor(self.registry, self.permissions, self.bus)
         self.fastpath = FastPath(resolve_app=self.computer.apps.resolve_name, resolve_project=self.projects.resolve,
                                  evaluate_math=evaluate_spoken_math, desktop=self.desktop_view)
-        self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()))
+        self.provider_router = ProviderRouter(self.pool, settings.llm.routes)
+        self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()),
+                             providers=self.provider_router)
         self.context = ContextBuilder(settings, self.memory, self.working, lambda: self.conversation.conversation_id,
                                       extra_context=self._extra_context)
         self.agent = AgentLoop(self.pool, self.executor, self.registry, self.bus)
@@ -89,10 +110,11 @@ class SugarApp:
         from sugar.audio.speech import SpeechOutput
         from sugar.audio.tts import build_synthesizer
 
-        self.synth = build_synthesizer(settings.tts, data / "tts_tmp")
+        self.synth = build_synthesizer(settings.tts, data / "tts_tmp", settings.paths.models_dir)
         self.player = AudioPlayer(device=settings.audio.output_device)
         self.player.volume = settings.tts.volume
         self.speech = SpeechOutput(self.synth, self.player, self.bus)
+        register_self_tools(self)
         self.stt = None
         self.pipeline = None
         if voice:
@@ -148,11 +170,11 @@ class SugarApp:
         )
 
     def _extra_context(self) -> str:
-        parts = [self.sessions.describe_for_context(), self.computer.describe()]
-        return "\n".join(p for p in parts if p)
+        active = self.working.active_project
+        return self.sessions.describe_for_context(active["path"] if active else None)
 
     async def _stop_media(self) -> str | None:
-        """"Stop" with nothing of Sugar's to stop: pause what's playing, if anything is."""
+        """Legacy media hook (not wired in SID): pause what's playing, if anything is."""
         if not self.computer.available:
             return None
         sessions = await self.computer.media.sessions()
@@ -274,9 +296,25 @@ class SugarApp:
                         f"Claude Code {cli.version}" if cli else "claude CLI not found")
 
     async def _check_providers(self) -> None:
+        ollama = self.settings.llm.ollama
+        if ollama.enabled and ollama.manage_server and "ollama" in self.pool.providers:
+            status = await self.ollama_server.ensure_running()
+            log_event("OLLAMA_SERVER", status=status)
         report = await self.pool.check_health()
         for name, info in report.items():
             self._component(f"llm:{name}", "ready" if info["ok"] else "unavailable", info["detail"])
+        self.bus.publish("providers.status", connectivity=self.pool.connectivity())
+        # Keep availability honest: re-check every minute so a provider that comes back is used again
+        # and one that went away is benched (instead of timing out on every request).
+        while True:
+            await asyncio.sleep(60)
+            report = await self.pool.check_health()
+            for name, info in report.items():
+                previous = self.components.get(f"llm:{name}", {}).get("status")
+                status = "ready" if info["ok"] else "unavailable"
+                if status != previous:
+                    self._component(f"llm:{name}", status, info["detail"])
+            self.bus.publish("providers.status", connectivity=self.pool.connectivity())
 
     def vocabulary_refresh(self) -> None:
         if self.stt is not None:
@@ -306,7 +344,10 @@ class SugarApp:
         if self.ui is not None:
             await self.ui.stop()
         await self.pool.aclose()
+        self.ollama_server.stop()
         self.memory.close()
+        if self.telemetry is not None:
+            self.telemetry.close()
 
     # ------------------------------------------------------------------ UI bridge
 
@@ -320,6 +361,8 @@ class SugarApp:
                                                                          "permissions", "stt"}),
             "history": turns,
             "project": self.working.active_project,
+            "previous_project": self.working.previous_project,
+            "assistant": self.settings.conversation.assistant_name,
             "projects": [p.to_dict() for p in self.projects.all()[:30]],
             "sessions": [s.to_dict() for s in self.sessions.all()],
             "providers": self.pool.status(),
@@ -328,7 +371,14 @@ class SugarApp:
             "voices": getattr(self.synth._active, "voices", []) if self.synth._active else [],
             "mic_paused": bool(self.pipeline and self.pipeline.paused),
             "pending_permission": self.permissions.pending.to_dict() if self.permissions.pending else None,
-            "desktop": self.computer.context.snapshot() if self.computer.available else None,
+            "pending_task": (self.orchestrator.pending.text if self.orchestrator.pending
+                             and self.orchestrator.pending.fresh else None),
+            "voice_profiles": list(VOICE_PROFILES),
+            "voice": voice_state(self),
+            "voice_identities": [describe(i, self.settings.tts.palettes) for i in IDENTITIES],
+            "personalities": [{"id": p.id, "name": p.name} for p in PERSONALITIES.values()],
+            "connectivity": self.pool.connectivity(),
+            "roleplay": bool(self.working.roleplay),
         }
 
     async def handle_command(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -363,6 +413,33 @@ class SugarApp:
             deleted = self.memory.delete(int(message.get("id", -1)))
             self.bus.publish("memory.changed", action="delete", id=message.get("id"))
             return {"ok": deleted}
+        if cmd == "voice.set":
+            result = await self.executor.execute("voice.set", {"voice": str(message.get("voice", "sid"))}, origin="user")
+            return {"ok": result.ok, "summary": result.summary}
+        if cmd == "personality.set":
+            result = await self.executor.execute("personality.set",
+                                                 {"personality": str(message.get("personality", "sid"))},
+                                                 origin="user")
+            return {"ok": result.ok, "summary": result.summary}
+        if cmd == "telemetry.history":
+            if self.telemetry is None:
+                return {"ok": False, "error": "telemetry is off"}
+            return {"ok": True, "history": self.telemetry.history(message.get("since"), message.get("until"))}
+        if cmd == "telemetry.export":
+            if self.telemetry is None:
+                return {"ok": False, "error": "telemetry is off"}
+            fmt = "csv" if message.get("format") == "csv" else "json"
+            content = self.telemetry.export(fmt, message.get("since"), message.get("until"))
+            return {"ok": True, "format": fmt, "content": content,
+                    "filename": f"sid-telemetry-{time.strftime('%Y%m%d-%H%M%S')}.{fmt}"}
+        if cmd == "telemetry.clear":
+            if self.telemetry is not None:
+                self.telemetry.clear()
+            return {"ok": True}
+        if cmd == "project.clear":
+            self.working.clear_project()
+            self.bus.publish("project.active", name=None, path=None, stack=[])
+            return {"ok": True}
         if cmd == "new_conversation":
             self.conversation.new_conversation()
             return {"ok": True}
@@ -407,3 +484,6 @@ class SugarApp:
             self.pipeline.endpointer.config = endpoint_config_from(self.settings)
         self.bus.publish("settings.changed", key=key, value=coerced)
         return {"ok": True, "value": coerced}
+
+
+SugarApp = SIDApp  # legacy name kept for scripts and tests written against Sugar

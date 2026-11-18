@@ -11,6 +11,8 @@ from typing import Any
 from sugar.agent.permissions import PermissionManager
 from sugar.core.events import EventBus
 from sugar.core.logging import log_event
+from sugar.security.policy import Decision
+from sugar.security.provenance import Origin, Provenance
 from sugar.tools.registry import ToolRegistry, ToolResult, ToolValidationError, current_origin, validate_arguments
 
 log = logging.getLogger(__name__)
@@ -23,7 +25,8 @@ class ToolExecutor:
         self._bus = bus
         self.on_result: Callable[[str, dict[str, Any], ToolResult], None] | None = None
 
-    async def execute(self, name: str, args: dict[str, Any] | None, *, origin: str = "model") -> ToolResult:
+    async def execute(self, name: str, args: dict[str, Any] | None, *, origin: str = "model",
+                      provenance: Provenance | None = None) -> ToolResult:
         tool = self.registry.get(name)
         if tool is None:
             return ToolResult.failure(f"I don't have a tool called {name}.", f"unknown tool {name}")
@@ -32,10 +35,19 @@ class ToolExecutor:
         except ToolValidationError as exc:
             return ToolResult.failure(f"Invalid arguments for {tool.name}: {exc}", str(exc))
 
-        allowed = await self.permissions.authorize(tool, clean, origin)
+        if provenance is None:
+            provenance = Provenance(Origin.DIRECT_USER_TEXT if origin == "user" else Origin.MODEL_GENERATED)
+        allowed = await self.permissions.authorize(tool, clean, origin, provenance)
         if not allowed:
-            log_event("TOOL_DENIED", tool=tool.name, origin=origin)
-            self._bus.publish("tool.denied", name=tool.name, action=tool.action_text(clean))
+            verdict = self.permissions.verdict(tool, clean, provenance)
+            blocked = verdict.decision == Decision.DENY
+            log_event("TOOL_BLOCKED" if blocked else "TOOL_DENIED", tool=tool.name, origin=origin,
+                      reason=verdict.reason, provenance=provenance.to_dict())
+            self._bus.publish("tool.denied", name=tool.name, action=tool.action_text(clean), blocked=blocked,
+                              reason=verdict.reason)
+            if blocked:
+                return ToolResult(ok=False, summary=f"I won't do that: {verdict.reason}.",
+                                  error="blocked by security policy", data={"risk": verdict.risk.label})
             return ToolResult(ok=False, summary="Okay, I won't do that.", error="permission denied by user")
 
         started = time.perf_counter()

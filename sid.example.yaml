@@ -1,0 +1,82 @@
+# Copy to sid.yaml to customise. Every key is optional; defaults live in
+# sugar/config/settings.py. Runtime changes made in the UI go to data/overrides.json.
+
+paths:
+  models_dir: D:\Sugar_Models          # Whisper models are stored in <models_dir>\Whisper
+
+audio:
+  input_device: null                    # name fragment, e.g. "Jabra"; null = system default
+  output_device: null
+
+stt:
+  device: auto                          # auto | cuda | cpu
+  final_model: large-v3-turbo
+  fast_model: small.en
+
+tts:
+  voice: EN-Newest
+  voice_profile: sid                    # sid (cloned) | female | neutral | sid_v2 | natural
+  speed: 0.97
+  pitch_offset: 0.0                     # semitones, -6..6 ("make your voice deeper")
+  # palettes:                           # entity colours per voice: core, glow, orbit, accent
+  #   sid: ["#ffab3d", "#f6cf7a", "#ff6a12", "#ff4524"]
+  #   female: ["#e8114f", "#ff6fa3", "#9e0c5c", "#ffb03a"]
+
+vad:
+  endpoint_complete_ms: 380             # silence before ending a clearly finished request
+  endpoint_default_ms: 750
+  endpoint_incomplete_ms: 1700          # "I want you to…"
+
+conversation:
+  user_name: Yuki
+  engagement: wake_word                 # wake_word ("Hey SID") | always
+  engagement_timeout_s: 45
+  wake_verify: true                     # re-check look-alikes ("He said…") before waking
+  scope: universal                      # universal | engineering_only (refuse non-engineering requests)
+  personality: sid                      # sid | cinematic | friendly | professional | creative
+  health_external: false                # personal health data may go to online models
+  desktop_control: true
+
+llm:
+  chat_chain: [freellm, ollama, claude]
+  reasoning_chain: [claude, freellm, ollama]
+  ollama:
+    chat_model: qwen2.5:3b
+    smart_model: qwen2.5:3b
+    executable: D:\Sugar_Models\ollama\ollama.exe     # SID starts and stops it when manage_server is on
+    models_dir: D:\Sugar_Models\ollama\models
+    manage_server: true
+  # routes:                             # provider order per category (see SID_PROVIDER_ROUTING.md)
+  #   general_knowledge: [freellm, claude, ollama]
+  #   math_reasoning: [claude, freellm, ollama]
+
+permissions:
+  auto_approve_level: 1                 # model actions without asking: 0 read only, 1 + low-risk, 2 + modifications
+                                        # destructive, privileged and network-transfer actions always ask;
+                                        # credential access is always refused (see SID_SECURITY_AUDIT.md)
+  trusted_tools: []                     # pre-approved up to modifications only, e.g. [filesystem.write]
+  allowed_roots: [D:\College]
+
+coding:
+  model: opus
+  task_timeout_s: 1800                  # stop a Claude Code run after 30 minutes
+  permission_mode: auto                 # Claude Code permission mode for work tasks
+  project_roots: [D:\College, D:\College\SOMESHIT DOWNLOADS, D:\College\WEBSITES]
+
+computer:
+  typing_mode: auto                     # auto | realtime | paste (auto pastes long text and code)
+  typing_interval_ms: 6                 # pause between characters when typing in real time
+  browser: ""                           # brave | chrome | edge | firefox; empty = Windows default
+  music_platform: auto                  # auto (Spotify when set up) | spotify | youtube
+  pause_other_media: true               # starting YouTube pauses Spotify and vice versa
+  youtube_region: ""                    # e.g. IN
+
+weather:
+  location: ""                          # empty = by IP
+
+telemetry:
+  enabled: true
+  retention_days: 30                    # measurements only, never conversation text
+
+ui:
+  window: auto                          # auto | webview | edge | browser | none

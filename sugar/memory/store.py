@@ -119,10 +119,32 @@ class MemoryStore:
     def recent_turns(self, conversation: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT role, content, heard, ts FROM turns WHERE conversation=? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, heard, ts, meta FROM turns WHERE conversation=? ORDER BY id DESC LIMIT ?",
                 (conversation, limit),
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        turns = []
+        for row in reversed(rows):
+            item = dict(row)
+            try:
+                item["meta"] = json.loads(item["meta"]) if item.get("meta") else {}
+            except (TypeError, ValueError):
+                item["meta"] = {}
+            turns.append(item)
+        return turns
+
+    def update_turn_meta(self, turn_id: int, **meta: Any) -> None:
+        """Merge ``meta`` into a stored turn (e.g. tag it as part of a roleplay once the route is known)."""
+        with self._lock:
+            row = self._db.execute("SELECT meta FROM turns WHERE id=?", (turn_id,)).fetchone()
+            if row is None:
+                return
+            try:
+                current = json.loads(row["meta"]) if row["meta"] else {}
+            except (TypeError, ValueError):
+                current = {}
+            current.update(meta)
+            self._db.execute("UPDATE turns SET meta=? WHERE id=?", (json.dumps(current), turn_id))
+            self._db.commit()
 
     def last_conversation(self) -> str | None:
         with self._lock:

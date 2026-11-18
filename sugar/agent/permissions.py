@@ -4,13 +4,13 @@ Policy lives here, in code — never in a prompt. Model output, file contents,
 web pages and Claude Code output can *request* actions but cannot change the
 level an action requires or approve it.
 
-Rules:
-  * level <= ``auto_approve_level`` (default NON_DESTRUCTIVE) runs immediately;
-  * tools listed in ``trusted_tools`` run immediately (deliberate opt-in);
-  * a SENSITIVE action the user asked for directly (fast path) runs, because
-    the spoken command is itself explicit; the same action proposed by a
-    model needs confirmation;
-  * DESTRUCTIVE actions always need confirmation.
+Decisions come from :mod:`sugar.security.policy` (provenance + action risk):
+  * credential access is denied;
+  * after the model has read untrusted content (web, files, search results, tool output) only
+    read-only actions run unasked; low-risk/modifying ones are confirmed; anything riskier is denied;
+  * the user's own commands run up to modifications; riskier ones are confirmed;
+  * the model acting on a direct request runs read-only and low-risk actions, modifications only with
+    ``auto_approve_level`` >= 2, and always confirms unknown, network, destructive and privileged ones.
 
 Confirmation is asynchronous: a :class:`PermissionRequest` is published, the
 conversation layer asks out loud, and the user's "yes"/"no" (or a UI click)
@@ -30,6 +30,8 @@ from typing import Any
 from sugar.config.settings import PermissionSettings
 from sugar.core.events import EventBus
 from sugar.core.logging import log_event
+from sugar.security.policy import Decision, Verdict, decide
+from sugar.security.provenance import Origin, Provenance
 from sugar.tools.registry import PermissionLevel, Tool
 
 log = logging.getLogger(__name__)
@@ -58,27 +60,43 @@ class PermissionManager:
         self._lock = asyncio.Lock()
         self._pending: PermissionRequest | None = None
         self.on_request: Callable[[PermissionRequest], Awaitable[None]] | None = None
+        self.last_verdict: Verdict | None = None
 
     @property
     def pending(self) -> PermissionRequest | None:
         return self._pending
 
-    def requires_confirmation(self, tool: Tool, level: PermissionLevel, origin: str) -> bool:
-        if tool.name in self._settings.trusted_tools:
-            return False
-        if level <= self._settings.auto_approve_level:
-            return False
-        if origin == "user" and level < PermissionLevel.DESTRUCTIVE:
-            return False
-        return True
+    def verdict(self, tool: Tool, args: dict[str, Any], provenance: Provenance) -> Verdict:
+        return decide(tool, args, provenance, auto_approve_level=self._settings.auto_approve_level,
+                      trusted_tools=tuple(self._settings.trusted_tools))
 
-    async def authorize(self, tool: Tool, args: dict[str, Any], origin: str) -> bool:
-        level = tool.level_for(args)
-        if not self.requires_confirmation(tool, level, origin):
+    def requires_confirmation(self, tool: Tool, level: PermissionLevel, origin: str) -> bool:
+        """Compatibility helper: whether an action at ``level`` would need a confirmation."""
+        provenance = Provenance(Origin.DIRECT_USER_TEXT if origin == "user" else Origin.MODEL_GENERATED)
+        probe = _LevelProbe(tool.name, level)
+        return self.verdict(probe, {}, provenance).decision != Decision.ALLOW
+
+    async def authorize(self, tool: Tool, args: dict[str, Any], origin: str,
+                        provenance: Provenance | None = None) -> bool:
+        if provenance is None:
+            provenance = Provenance(Origin.DIRECT_USER_TEXT if origin == "user" else Origin.MODEL_GENERATED)
+        verdict = self.verdict(tool, args, provenance)
+        self.last_verdict = verdict
+        log_event("PERMISSION_VERDICT", tool=tool.name, decision=verdict.decision.value, risk=verdict.risk.label,
+                  reason=verdict.reason, provenance=provenance.to_dict())
+        self._bus.publish("security.verdict", tool=tool.name, decision=verdict.decision.value,
+                          risk=verdict.risk.label, reason=verdict.reason, provenance=provenance.to_dict())
+        if verdict.decision == Decision.ALLOW:
             return True
+        if verdict.decision == Decision.DENY:
+            return False
+        level = tool.level_for(args)
+        action = tool.action_text(args)
+        if provenance.tainted:
+            action = f"{action} (suggested after reading untrusted content: {provenance.describe()})"
         async with self._lock:  # one spoken question at a time
             loop = asyncio.get_running_loop()
-            request = PermissionRequest(tool.name, tool.action_text(args), level, origin, future=loop.create_future())
+            request = PermissionRequest(tool.name, action, level, origin, future=loop.create_future())
             self._pending = request
             log_event("PERMISSION_REQUEST", tool=tool.name, action=request.action, level=level.label)
             self._bus.publish("permission.request", **request.to_dict())
@@ -97,6 +115,26 @@ class PermissionManager:
             self._bus.publish("permission.resolved", id=request.id, approved=approved)
             return approved
 
+    async def confirm(self, action: str, tool: str = "sid.confirm") -> bool:
+        """Ask the user a yes/no question about ``action`` through the normal confirmation flow."""
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            request = PermissionRequest(tool, action, PermissionLevel.SENSITIVE, "user", future=loop.create_future())
+            self._pending = request
+            self._bus.publish("permission.request", **request.to_dict())
+            try:
+                if self.on_request is not None:
+                    await self.on_request(request)
+                approved = await asyncio.wait_for(asyncio.shield(request.future),
+                                                  timeout=self._settings.confirmation_timeout_s)
+            except TimeoutError:
+                approved = False
+                self._bus.publish("permission.expired", id=request.id)
+            finally:
+                self._pending = None
+            self._bus.publish("permission.resolved", id=request.id, approved=approved)
+            return approved
+
     def resolve(self, approved: bool, request_id: str | None = None) -> bool:
         request = self._pending
         if request is None or request.future is None or request.future.done():
@@ -108,3 +146,14 @@ class PermissionManager:
 
     def cancel_pending(self) -> None:
         self.resolve(False)
+
+
+@dataclass
+class _LevelProbe:
+    """A stand-in tool with a fixed level, for :meth:`PermissionManager.requires_confirmation`."""
+
+    name: str
+    level: PermissionLevel
+
+    def level_for(self, args: dict[str, Any]) -> PermissionLevel:
+        return self.level

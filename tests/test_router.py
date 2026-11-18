@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from sugar.intelligence.fastpath import FastPath, normalize
-from sugar.intelligence.router import CHAT_TOOLS, Route, Router
+from sugar.intelligence.router import Route, Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.tools.calculator import evaluate_spoken_math
 
@@ -150,33 +150,145 @@ def router(settings, working=None, coding=False) -> Router:
 def test_routes(settings):
     r = router(settings)
     assert r.route("stop").route == Route.CONTROL
-    assert r.route("open chrome").route == Route.COMMAND
-    assert r.route("How do you make butter chicken?").route == Route.CHAT
-    assert r.route("Find the files in my downloads folder and rename them").route == Route.AGENT
-    assert r.route("Compare REST and GraphQL in detail with pros and cons").route == Route.REASONING
+    assert r.route("show my projects").route == Route.COMMAND
+    assert r.route("What is Claude doing?").route == Route.COMMAND
+    assert r.route("How do you make butter chicken?").route == Route.ANSWER
+    assert r.route("Find the files in my downloads folder and rename them").route == Route.DESKTOP
+    assert r.route("Compare REST and GraphQL in detail with pros and cons").route == Route.CODING_QA
+    assert r.route("Compare REST and GraphQL in detail with pros and cons").purpose == "reasoning"
 
 
-def test_chat_uses_a_small_toolset(settings):
-    decision = router(settings).route("Tell me a joke")
-    assert decision.tool_names == CHAT_TOOLS and len(CHAT_TOOLS) <= 15
+@pytest.mark.parametrize("text", ["open chrome", "Play Master of Puppets by Metallica.", "Volume 50", "What time is it?",
+                                  "What's the weather like today?", "Take a screenshot.", "Open YouTube.",
+                                  "Type this: hello world", "What's 25 times 4?", "Remember that I prefer tea."])
+def test_desktop_commands_are_rejected_when_desktop_control_is_off(settings, text):
+    settings.conversation.desktop_control = False
+    settings.conversation.scope = "engineering_only"
+    assert router(settings).route(text).route == Route.REJECTED
 
 
-def test_coding_requires_project_context(settings):
-    assert router(settings).route("Fix the authentication bug").route != Route.CODING
-    working = WorkingMemory()
-    working.set_project("Jiva", "D:/Jiva")
-    r = router(settings, working)
-    assert r.route("Fix the authentication bug").route == Route.CODING
-    assert r.route("Analyze the project and tell me what is broken").route == Route.CODING
-    assert r.route("Make the UI cleaner").route == Route.CODING
-    assert r.route("What's the capital of France?").route == Route.CHAT
+@pytest.mark.parametrize("text", ["open chrome", "Play Master of Puppets by Metallica.", "Volume 50", "What time is it?",
+                                  "Take a screenshot.", "Open YouTube.", "Type this: hello world"])
+def test_desktop_commands_run_directly_when_desktop_control_is_on(settings, text):
+    decision = router(settings).route(text)
+    assert decision.route == Route.DESKTOP and decision.intent is not None
 
 
-def test_coding_follow_ups(settings):
+@pytest.mark.parametrize(("text", "platform", "query"), [
+    ("type lofi beats in youtube", "youtube", "lofi beats"),
+    ("search spotify for daft punk", "spotify", "daft punk"),
+    ("Search YouTube for RTX 5050 benchmarks", "youtube", "rtx 5050 benchmarks"),
+    ("spotify search interstellar soundtrack", "spotify", "interstellar soundtrack"),
+    ("type blinding lights into spotify", "spotify", "blinding lights"),
+])
+def test_youtube_and_spotify_searches(settings, text, platform, query):
+    decision = router(settings).route(text)
+    assert decision.route == Route.DESKTOP
+    assert decision.intent.call == ("media.search", {"platform": platform, "query": query})
+
+
+def test_free_form_computer_operations_go_to_the_agent_with_computer_tools(settings):
+    for text in ("open a new notepad and start writing a fibonacci function", "close the tab with the error",
+                 "move the files in my downloads folder into a new folder", "turn on bluetooth"):
+        decision = router(settings).route(text)
+        assert decision.route == Route.DESKTOP and decision.intent is None and "computer" in decision.tool_groups, text
+
+
+def test_universal_requests_get_a_model_without_claude_code_or_desktop_tools(settings):
+    r = router(settings)
+    expected = {"Tell me a joke about Java": "creative_writing", "How do you make butter chicken?": "general_knowledge",
+                "Recommend a movie": "general_knowledge", "Explain how black holes work.": "general_knowledge",
+                "Write a dark fantasy poem.": "creative_writing", "hello": "general_conversation",
+                "Explain what haemoglobin measures in a blood test.": "health_information",
+                "Let's roleplay a conversation between an astronaut and an alien.": "roleplay",
+                "Solve x^2 - 5x + 6 = 0": "math_reasoning", "Teach me how photosynthesis works": "education"}
+    for text, category in expected.items():
+        decision = r.route(text)
+        assert decision.route == Route.ANSWER and decision.category == category, (text, decision.category)
+        assert "terminal.run" not in (decision.tool_names or set()), text
+
+
+def test_research_gets_only_read_only_web_tools(settings):
+    decision = router(settings).route("Research the latest developments in solid state batteries")
+    assert decision.route == Route.ANSWER and decision.tool_names == {"web.lookup", "web.fetch"}
+
+
+def test_personal_health_data_stays_local_unless_authorised(settings):
+    r = router(settings)
+    decision = r.route("My haemoglobin is 9.8 g/dL, is that bad?")
+    assert decision.local_only
+    r.health_authorized = True
+    assert not r.route("My haemoglobin is 9.8 g/dL, is that bad?").local_only
+    assert not r.route("Explain what haemoglobin measures in a blood test.").local_only
+
+
+@pytest.mark.parametrize(("text", "tool", "args"), [
+    ("switch to your female voice", "voice.set", {"voice": "female"}),
+    ("change your voice back", "voice.set", {"voice": "sid", "reset": True}),
+    ("switch back to your original voice", "voice.set", {"voice": "sid"}),
+    ("speak more slowly", "voice.adjust", {"setting": "speed", "delta": -0.08}),
+    ("make your voice deeper", "voice.adjust", {"setting": "pitch", "delta": -1.5}),
+    ("use a softer voice", "voice.adjust", {"setting": "volume", "delta": -0.2}),
+    ("be more professional", "personality.set", {"personality": "professional"}),
+    ("switch to your cinematic personality", "personality.set", {"personality": "cinematic"}),
+    ("end the roleplay", "roleplay.end", {}),
+    ("allow online health answers", "health.authorize", {"allow": True, "persist": False}),
+])
+def test_self_commands(settings, text, tool, args):
+    decision = router(settings).route(text)
+    assert decision.route == Route.COMMAND and decision.intent.call == (tool, args)
+
+
+def test_programming_questions_get_no_tools(settings):
+    decision = router(settings).route("Why does this Python function return None?")
+    assert decision.route == Route.CODING_QA and not decision.tool_groups and not decision.tool_names
+
+
+def test_engineering_memory_is_allowed(settings):
+    assert router(settings).route("Remember that this project uses pnpm.").route == Route.COMMAND
+
+
+def test_execution_routes(settings):
+    r = router(settings)
+    assert r.route("Fix the authentication bug").route == Route.BUILD_EXECUTION
+    assert r.route("Create a React application with authentication.").route == Route.BUILD_EXECUTION
+    assert r.route("Analyze the architecture of this project").route == Route.PROJECT_ANALYSIS
+    assert r.route("The build failed.").route == Route.PROJECT_ANALYSIS
+    assert r.route("What's the capital of France?").route == Route.ANSWER
+
+
+def test_named_project_is_attached_to_the_decision(settings):
+    decision = router(settings).route("Fix the login bug in Jiva")
+    assert decision.route == Route.BUILD_EXECUTION and decision.project.name == "Jiva"
+
+
+def test_follow_ups_need_engineering_context(settings):
+    assert router(settings).route("Do it.").route == Route.CLARIFY
     working = WorkingMemory()
     working.set_project("Jiva", "D:/Jiva")
     working.record_action("coding", "asked Claude Code to analyze")
     r = router(settings, working)
-    assert r.route("Fix all three.").route == Route.CODING
-    assert r.route("Do it.").route == Route.CODING
-    assert r.route("Why did that test fail?").route == Route.CODING
+    assert r.route("Fix all three.").route == Route.BUILD_EXECUTION
+    assert r.route("Do it.").route == Route.BUILD_EXECUTION
+
+
+def test_status_questions_go_to_the_workbench(settings):
+    r = router(settings)
+    for text in ("Are you done?", "status", "what's the status"):
+        decision = r.route(text)
+        assert decision.route == Route.COMMAND and decision.intent.name == "claude.status", text
+
+
+@pytest.mark.parametrize("text", ["check how much free space is left on my D drive", "what's my battery level",
+                                  "list the processes using the most memory", "kill discord"])
+def test_system_questions_go_to_the_agent(settings, text):
+    assert router(settings).route(text).route == Route.DESKTOP, text
+
+
+def test_named_project_without_a_change_asks_what_to_change(settings):
+    working = WorkingMemory()
+    working.set_project("SUGAR-AI", "D:/sugar")  # an unrelated active repository
+    decision = router(settings, working).route("Modify my portfolio.")
+    assert decision.route == Route.CLARIFY and decision.project.name == "yukith-portfolio"
+    specific = router(settings, working).route("Fix the contact form in my portfolio")
+    assert specific.route == Route.BUILD_EXECUTION and specific.project.name == "yukith-portfolio"

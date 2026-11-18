@@ -2,7 +2,7 @@
 
 Preference order (``ui.window``):
   * ``webview`` — pywebview (Edge WebView2): a real app window whose close
-    button shuts Sugar down;
+    button shuts SID down;
   * ``edge`` — Microsoft Edge in app mode (no tabs/address bar);
   * ``browser`` — the default browser;
   * ``none`` — headless (voice only; the UI can still be opened later).
@@ -29,14 +29,15 @@ def webview_available() -> bool:
     return True
 
 
-def run_webview(url: str, on_closed: Callable[[], None], title: str = "Sugar") -> None:
+def run_webview(url: str, on_closed: Callable[[], None], title: str = "SID") -> None:
     """Blocks the calling (main) thread until the window is closed."""
     import webview
 
     window = webview.create_window(title, url, width=1280, height=860, min_size=(860, 600),
-                                   background_color="#07080d", text_select=True)
+                                   background_color="#000000", text_select=True)
     window.events.closed += lambda: on_closed()
-    webview.start(private_mode=False, storage_path=str(Path(os.environ.get("LOCALAPPDATA", ".")) / "Sugar" / "webview"))
+    # Window profile on the project drive (D:), not %LOCALAPPDATA% on C:.
+    webview.start(private_mode=False, storage_path=str(Path(__file__).resolve().parents[2] / "data" / "webview"))
 
 
 def _edge_path() -> str | None:

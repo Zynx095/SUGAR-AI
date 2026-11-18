@@ -35,6 +35,12 @@ class _Circuit:
     last_error: str = ""
     health: ProviderHealth | None = None
     history: list[float] = field(default_factory=list)
+    ttft_ms: float | None = None  # exponentially weighted time to first token
+    samples: int = 0
+
+    def record_ttft(self, ms: float) -> None:
+        self.ttft_ms = ms if self.ttft_ms is None else 0.7 * self.ttft_ms + 0.3 * ms
+        self.samples += 1
 
     def available(self, now: float) -> bool:
         return now >= self.open_until
@@ -98,6 +104,7 @@ class ProviderPool:
             circuit = self._circuits[provider.name]
             model = (model_for or {}).get(provider.name)
             produced = False
+            first_token = True
             started = time.perf_counter()
             log_event("LLM_START", provider=provider.name, model=model or "default", purpose=purpose)
             self._bus.publish("llm.start", provider=provider.name, model=provider.describe(model), purpose=purpose)
@@ -111,6 +118,9 @@ class ProviderPool:
                 ):
                     if chunk.kind in ("text", "tool_calls"):
                         produced = True
+                        if first_token:
+                            first_token = False
+                            circuit.record_ttft((time.perf_counter() - started) * 1000)
                     if chunk.kind == "meta":
                         chunk.data.setdefault("provider", provider.name)
                     yield chunk
@@ -147,6 +157,31 @@ class ProviderPool:
         self._bus.publish("providers.health", providers=report)
         return report
 
+    def latency(self, name: str) -> dict[str, float] | None:
+        circuit = self._circuits.get(name)
+        if circuit is None or circuit.ttft_ms is None:
+            return None
+        return {"ttft_ms": circuit.ttft_ms, "samples": circuit.samples}
+
+    def connectivity(self) -> str:
+        """online | degraded | local_fallback | local_only | offline — from real health checks and circuit state.
+
+        local_only: no online provider is configured at all (by choice), and the local model is up."""
+        now = time.monotonic()
+        up = {name for name, circuit in self._circuits.items()
+              if name in self.providers and circuit.available(now) and (circuit.health is None or circuit.health.ok)}
+        external = {name for name, provider in self.providers.items() if not provider.is_local}
+        local = set(self.providers) - external
+        if not up:
+            return "offline"
+        if not external:
+            return "local_only"
+        if not (up & external):
+            return "local_fallback" if up & local else "offline"
+        if up == set(self.providers):
+            return "online"
+        return "degraded"
+
     def status(self) -> dict[str, dict[str, Any]]:
         now = time.monotonic()
         return {
@@ -155,6 +190,8 @@ class ProviderPool:
                 "failures": circuit.failures,
                 "last_error": circuit.last_error,
                 "health": circuit.health.detail if circuit.health else None,
+                "ttft_ms": round(circuit.ttft_ms) if circuit.ttft_ms is not None else None,
+                "local": bool(getattr(self.providers.get(name), "is_local", False)),
             }
             for name, circuit in self._circuits.items()
         }

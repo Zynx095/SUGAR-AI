@@ -10,7 +10,7 @@ from conftest import run
 from fake_desktop import FakeDesktop, FakeWindow, browser_window
 
 from sugar.intelligence.fastpath import DesktopView, FastPath
-from sugar.intelligence.router import COMPUTER_GROUPS, Route, Router
+from sugar.intelligence.router import Route, Router
 from sugar.intelligence.working import WorkingMemory
 
 
@@ -164,23 +164,93 @@ def test_undo_goes_to_coding_after_coding_work():
 
 # ---------------------------------------------------------------------------------------- routing
 
-def test_computer_requests_route_to_the_agent_with_computer_tools(settings):
+def test_computer_requests_never_route_to_desktop_tools_when_desktop_control_is_off(settings):
+    settings.conversation.desktop_control = False
+    settings.conversation.scope = "engineering_only"
     router = Router(settings, grammar(), WorkingMemory())
     for text in ("Open a new notepad and start writing a Fibonacci code using recursive function.",
                  "write directly into the notepad", "close the tab with the error", "summarize this page",
-                 "play a song by a Hindi artist"):
+                 "play a song by a Hindi artist", "open notepad and type hello", "volume 50", "open chrome"):
         decision = router.route(text)
-        assert decision.route == Route.AGENT, text
-        assert decision.tool_groups == COMPUTER_GROUPS
-    assert router.route("What's your favourite colour?").route == Route.CHAT
+        assert decision.route not in (Route.COMMAND, Route.BUILD_EXECUTION, Route.PROJECT_ANALYSIS), text
+        assert not decision.tool_groups
+    assert router.route("What's your favourite colour?").route == Route.REJECTED
 
 
 # ---------------------------------------------------------------------------------------- end to end
 
-def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
-    """Voice text → fast path sequence → executor → computer control → the fake desktop."""
+def test_desktop_commands_are_refused_when_desktop_control_is_off(settings, monkeypatch):
+    """Text → router → refusal: the desktop backend sees no launch, keystroke or close."""
+    settings.conversation.desktop_control = False
+    settings.conversation.scope = "engineering_only"
     import sugar.computer.engine as engine
-    from sugar.app.application import SugarApp
+    from sugar.app.application import SIDApp
+    from sugar.intelligence.domain import REFUSAL
+
+    desktop = FakeDesktop()
+    desktop.add(browser_window())
+    launched = []
+    desktop.launchers["shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"] = (
+        lambda: launched.append("notepad") or FakeWindow("Untitled - Notepad", "notepad.exe", 300,
+                                                         class_name="Notepad"))
+    monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
+    settings.ui.enabled = False
+    settings.computer.backend = "auto"  # even with the legacy backend switched on
+
+    async def scenario():
+        app = SIDApp(settings, voice=False)
+        app.audio_output = False
+        app.apps.loaded_at = 9e12
+        await app.start()
+        replies = []
+        done = asyncio.Event()
+
+        def on_message(event):
+            replies.append(event.data)
+            done.set()
+
+        app.bus.subscribe("assistant.message", on_message)
+        for utterance in ("Open Notepad and type: Hello, this is SID.", "close this", "volume 50"):
+            done.clear()
+            await app.conversation.handle_text(utterance)
+            await asyncio.wait_for(done.wait(), 15)
+        await app.shutdown()
+        return replies
+
+    replies = run(scenario())
+    assert launched == []
+    assert not [w for w in desktop.windows.values() if w.process == "notepad.exe"]
+    assert all(r["route"] == "rejected" and r["text"] == REFUSAL for r in replies)
+
+
+def test_stop_with_nothing_to_stop_pauses_the_music(settings, monkeypatch):
+    import sugar.computer.engine as engine
+    from sugar.app.application import SIDApp
+    from sugar.computer.backend import MediaSession
+
+    desktop = FakeDesktop()
+    desktop.sessions = [MediaSession("SpotifyAB.SpotifyMusic!Spotify", "Starboy", "The Weeknd", "playing", True)]
+    monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
+    settings.ui.enabled = False
+    settings.computer.backend = "auto"
+
+    async def scenario():
+        app = SIDApp(settings, voice=False)
+        app.audio_output = False
+        app.apps.loaded_at = 9e12
+        await app.start()
+        await app.conversation.handle_text("stop")
+        await asyncio.sleep(0.5)
+        await app.shutdown()
+
+    run(scenario())
+    assert desktop.media_log == [("SpotifyAB.SpotifyMusic!Spotify", "pause")]
+
+
+def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
+    """Desktop control on: voice text → grammar sequence → executor → computer control → the fake desktop."""
+    import sugar.computer.engine as engine
+    from sugar.app.application import SIDApp
 
     desktop = FakeDesktop()
     desktop.add(browser_window())
@@ -188,11 +258,12 @@ def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
         lambda: FakeWindow("Untitled - Notepad", "notepad.exe", 300, class_name="Notepad"))
     monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
     settings.ui.enabled = False
+    settings.computer.backend = "auto"
     settings.computer.typing_interval_ms = 0
     settings.computer.key_gap_ms = 0
 
     async def scenario():
-        app = SugarApp(settings, voice=False)
+        app = SIDApp(settings, voice=False)
         app.audio_output = False
         app.apps.loaded_at = 9e12
         from sugar.computer.apps import AppEntry
@@ -208,7 +279,7 @@ def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
 
         app.bus.subscribe("assistant.message", on_message)
         texts = {}
-        for utterance in ("Open Notepad and type: Hello, this is Sugar AI.", "close this", "don't save"):
+        for utterance in ("Open Notepad and type: Hello, this is SID.", "close this", "don't save"):
             done.clear()
             await app.conversation.handle_text(utterance)
             await asyncio.wait_for(done.wait(), 15)
@@ -218,35 +289,7 @@ def test_open_notepad_and_type_through_the_whole_app(settings, monkeypatch):
         return replies, texts
 
     replies, texts = run(scenario())
-    assert replies[0]["route"] == "command" and "Notepad's open." in replies[0]["text"]
-    assert texts["Open Notepad and type: Hello, this is Sugar AI."] == "Hello, this is Sugar AI."
-    assert "unsaved changes" in replies[1]["text"]  # "close this" = Notepad, which asks first
-    assert texts["close this"] == "Hello, this is Sugar AI."
+    assert replies[0]["route"] == "desktop" and "Notepad's open." in replies[0]["text"]
+    assert texts["Open Notepad and type: Hello, this is SID."] == "Hello, this is SID."
+    assert "unsaved changes" in replies[1]["text"]
     assert texts["don't save"] is None and "Closed Notepad" in replies[2]["text"]
-
-
-def test_stop_with_nothing_to_stop_pauses_the_music(settings, monkeypatch):
-    import sugar.computer.engine as engine
-    from sugar.app.application import SugarApp
-    from sugar.computer.backend import MediaSession
-
-    desktop = FakeDesktop()
-    desktop.sessions = [MediaSession("SpotifyAB.SpotifyMusic!Spotify", "Starboy", "The Weeknd", "playing", True)]
-    monkeypatch.setattr(engine, "create_backend", lambda kind="auto": desktop)
-    settings.ui.enabled = False
-
-    async def scenario():
-        app = SugarApp(settings, voice=False)
-        app.audio_output = False
-        app.apps.loaded_at = 9e12
-        await app.start()
-        replies = []
-        app.bus.subscribe("assistant.message", lambda e: replies.append(e.data))
-        await app.conversation.handle_text("stop")
-        await asyncio.sleep(1.5)
-        await app.shutdown()
-        return replies
-
-    replies = run(scenario())
-    assert desktop.media_log == [("SpotifyAB.SpotifyMusic!Spotify", "pause")]
-    assert replies and replies[-1]["text"].startswith("Paused")

@@ -182,6 +182,44 @@ def register(registry: ToolRegistry, services: ToolServices) -> None:
                            params(browser=BROWSER, url={"type": "string"}, new_window={"type": "boolean", "default": False},
                                   private={"type": "boolean", "default": False}),
                            open_browser, L.NON_DESTRUCTIVE, 25, EVERYWHERE))
+    async def media_search(args: dict[str, Any]) -> ToolResult:
+        """Type a search into YouTube (in the user's browser) or Spotify (the desktop app's search page)."""
+        import asyncio
+        import os
+        from urllib.parse import quote, quote_plus
+
+        query = str(args["query"]).strip()
+        platform = str(args.get("platform", "youtube")).lower()
+        if not query:
+            return ToolResult.failure("What should I search for?")
+        if platform == "spotify":
+            uri = "spotify:search:" + quote(query)
+            try:
+                await asyncio.to_thread(os.startfile, uri)  # the Spotify app opens on its search page
+                services.working.record_action("media", f"searched Spotify for {query}", tool="media.search",
+                                               args={"platform": "spotify", "query": query})
+                return ToolResult(True, f"Searching Spotify for {query}.", data={"platform": "spotify",
+                                                                                 "query": query, "uri": uri})
+            except OSError:
+                url = "https://open.spotify.com/search/" + quote(query)
+                result = await run(browser.navigate, url, new_tab=True, browser=None)
+                record(result)
+                return result.to_tool_result() if not result.success else ToolResult(
+                    True, f"Spotify isn't installed, so I searched it on the web for {query}.", data={"url": url})
+        url = "https://www.youtube.com/results?search_query=" + quote_plus(query)
+        result = await run(browser.navigate, url, new_tab=True, browser=args.get("browser"))
+        record(result)
+        if not result.success:
+            return result.to_tool_result()
+        return ToolResult(True, f"Searching YouTube for {query}.", data={"platform": "youtube", "query": query,
+                                                                          "url": url})
+
+    registry.register(Tool("media.search", "Type a search into YouTube (browser) or Spotify (desktop app) and show the "
+                           "results. Use media.play instead to play something.",
+                           params(["query"], query={"type": "string"},
+                                  platform={"type": "string", "enum": ["youtube", "spotify"], "default": "youtube"}),
+                           media_search, L.NON_DESTRUCTIVE, 40, EVERYWHERE,
+                           describe=lambda a: f"search {a.get('platform', 'youtube')} for {a.get('query')}"))
     registry.register(Tool("browser.open_url", "Open a web address in the browser (new tab by default). Never "
                            "invent links: for videos use media.play.",
                            params(["url"], url={"type": "string"}, new_tab={"type": "boolean", "default": True},

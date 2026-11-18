@@ -7,7 +7,10 @@
   Robotic, but it has no dependencies; used only if MeloTTS fails.
 
 :class:`Synthesizer` owns the fallback order and a small cache for short
-phrases Sugar says often ("Done.", "Yeah?") so they cost nothing.
+phrases SID says often ("Done.", "Yes?") so they cost nothing.
+
+MeloTTS output is shaped into SID's voice by :mod:`sugar.audio.voice_profile`
+(``tts.voice_profile``; ``natural`` turns it off).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from typing import Protocol
 
 import numpy as np
 
+from sugar.audio.voice_profile import apply_profile, get_profile, length_scale_factor
 from sugar.config.settings import TTSSettings
 from sugar.core.processes import CREATE_NO_WINDOW
 
@@ -53,8 +57,11 @@ def _resample(audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarr
 class MeloEngine:
     name = "melo"
 
-    def __init__(self, settings: TTSSettings) -> None:
+    def __init__(self, settings: TTSSettings, models_dir: Path | None = None) -> None:
         self._settings = settings
+        self._models_dir = models_dir
+        self._converter = None  # OpenVoice tone colour converter for cloned profiles
+        self._converter_failed = False
         self._tts = None
         self._speaker_id = 0
         self._lock = threading.Lock()
@@ -93,6 +100,8 @@ class MeloEngine:
         self._speaker_id = speakers.get(self._settings.voice, next(iter(speakers.values())))
         self.sample_rate = int(self._tts.hps.data.sampling_rate)
         self.voices = list(speakers.keys())
+        if get_profile(self._settings.voice_profile).clone:
+            self._clone_converter()
         self.synthesize("Okay.")  # first CUDA call compiles kernels (~2 s)
         log.info("MeloTTS ready on %s in %.1fs (voice %s)", self.device, time.perf_counter() - started,
                  self._settings.voice)
@@ -112,6 +121,7 @@ class MeloEngine:
             raise RuntimeError("MeloTTS is not loaded")
         text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
         s = self._settings
+        profile = get_profile(s.voice_profile)
         with self._lock, torch.inference_mode():
             bert, ja_bert, phones, tones, lang_ids = melo_utils.get_text_for_tts_infer(
                 text, tts.language, tts.hps, tts.device, tts.symbol_to_id
@@ -126,12 +136,51 @@ class MeloEngine:
                 lang_ids.to(device).unsqueeze(0),
                 bert.to(device).unsqueeze(0),
                 ja_bert.to(device).unsqueeze(0),
-                sdp_ratio=s.sdp_ratio,
-                noise_scale=s.noise_scale,
-                noise_scale_w=s.noise_scale_w,
-                length_scale=1.0 / max(0.5, s.speed),
+                sdp_ratio=s.sdp_ratio if profile.sdp_ratio is None else profile.sdp_ratio,
+                noise_scale=s.noise_scale if profile.noise_scale is None else profile.noise_scale,
+                noise_scale_w=s.noise_scale_w if profile.noise_scale_w is None else profile.noise_scale_w,
+                length_scale=length_scale_factor(profile) / max(0.5, s.speed * profile.pace),
             )[0][0, 0]
-            return audio.float().cpu().numpy().astype(np.float32)
+            raw = audio.float().cpu().numpy().astype(np.float32)
+        if profile.clone:
+            converter = self._clone_converter()
+            if converter is not None:
+                try:
+                    return self._offset(converter.convert(raw, self.sample_rate, air_db=profile.clone_air_db))
+                except Exception:
+                    log.exception("voice conversion failed; using the DSP approximation for this sentence")
+            profile = get_profile("sid_dsp")  # same voice, approximated without the converter
+        return self._offset(apply_profile(raw, self.sample_rate, profile))
+
+    def _offset(self, audio: np.ndarray) -> np.ndarray:
+        """The user's pitch adjustment ("deeper", "higher"), on top of any voice."""
+        offset = float(getattr(self._settings, "pitch_offset", 0.0) or 0.0)
+        if not offset or audio.size == 0:
+            return audio
+        from sugar.audio.voice_profile import _psola
+
+        return _psola(audio, self.sample_rate, 2 ** (offset / 12.0))
+
+    def _clone_converter(self):
+        """Load the OpenVoice converter once (models on D:, see voice_clone.py); None if unavailable."""
+        if self._converter is not None or self._converter_failed:
+            return self._converter
+        from sugar.audio.voice_clone import ToneConverter
+        from sugar.config.settings import ROOT_DIR
+
+        models = self._models_dir or Path(r"D:\Sugar_Models")
+        reference = Path(self._settings.voice_reference)
+        if not reference.is_absolute():
+            reference = ROOT_DIR / reference
+        converter = ToneConverter(models / "OpenVoiceV2", reference, tau=self._settings.clone_tau,
+                                  device=self._settings.device)
+        try:
+            converter.load()
+            self._converter = converter
+        except Exception as exc:
+            self._converter_failed = True
+            log.warning("voice cloning unavailable (%s); using the DSP approximation", exc)
+        return self._converter
 
 
 class SapiEngine:
@@ -143,7 +192,7 @@ class SapiEngine:
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         "$s.Rate = {rate}; "
-        "$s.SetOutputToWaveFile($env:SUGAR_TTS_OUT); "
+        "$s.SetOutputToWaveFile($env:SID_TTS_OUT); "
         "$s.Speak([Console]::In.ReadToEnd()); $s.Dispose()"
     )
 
@@ -166,7 +215,7 @@ class SapiEngine:
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", self._SCRIPT.format(rate=rate)],
                 input=text.encode("utf-8"),
-                env={**os.environ, "SUGAR_TTS_OUT": path},
+                env={**os.environ, "SID_TTS_OUT": path},
                 capture_output=True,
                 timeout=30,
                 check=True,
@@ -182,6 +231,74 @@ class SapiEngine:
                 os.remove(path)
             except OSError:
                 pass
+
+
+# Pause after a chunk, by how the chunk ends: what a speaker would leave between those words.
+PAUSE_AFTER_S = {"sentence": 0.16, "clause": 0.07, "none": 0.03}
+
+
+def trim_silence(audio: np.ndarray, rate: int, threshold_db: float = -42.0, margin_s: float = 0.012) -> np.ndarray:
+    """Cut the leading and trailing silence each MeloTTS call adds (the "robotic gaps" between chunks)."""
+    if audio.size == 0:
+        return audio
+    frame = max(1, int(rate * 0.01))
+    usable = audio[: audio.size - audio.size % frame] if audio.size >= frame else audio
+    if usable.size < frame:
+        return audio
+    rms = np.sqrt(np.mean(usable.reshape(-1, frame).astype(np.float64) ** 2, axis=1))
+    peak = float(rms.max()) or 1.0
+    loud = np.nonzero(20 * np.log10(np.maximum(rms, 1e-9) / peak) > threshold_db)[0]
+    if loud.size == 0:
+        return audio
+    margin = int(rate * margin_s)
+    start = max(0, loud[0] * frame - margin)
+    end = min(audio.size, (loud[-1] + 1) * frame + margin)
+    return audio[start:end]
+
+
+def tighten_pauses(audio: np.ndarray, rate: int, longest_s: float = 0.17, threshold_db: float = -42.0) -> np.ndarray:
+    """Shorten MeloTTS's long internal pauses (at full stops it often leaves ~0.3 s) to ``longest_s``."""
+    frame = int(rate * 0.01)
+    if audio.size < frame * 4:
+        return audio
+    n = audio.size // frame
+    rms = np.sqrt(np.mean(audio[: n * frame].reshape(n, frame).astype(np.float64) ** 2, axis=1))
+    quiet = 20 * np.log10(np.maximum(rms, 1e-9) / (float(rms.max()) or 1.0)) < threshold_db
+    keep_frames = int(longest_s / 0.01)
+    keep = np.ones(audio.size, dtype=bool)
+    run_start = None
+    for i in range(n + 1):
+        if i < n and quiet[i]:
+            if run_start is None:
+                run_start = i
+            continue
+        if run_start is not None and i - run_start > keep_frames:
+            # keep the edges of the pause, drop its middle
+            cut_from = (run_start + keep_frames // 2) * frame
+            cut_to = (i - keep_frames // 2) * frame
+            keep[cut_from:cut_to] = False
+        run_start = None
+    return audio[keep]
+
+
+def join_smoothly(audio: np.ndarray, text: str, rate: int) -> np.ndarray:
+    """Trim a chunk's own silence, fade its edges and end it with a natural pause for its punctuation.
+
+    Chunks are played back to back, so this sets the rhythm between them: a breath after a sentence, a
+    short catch after a comma, and nothing that sounds like the voice stalled.
+    """
+    if audio.size == 0:
+        return audio
+    clip = tighten_pauses(trim_silence(audio, rate).astype(np.float32, copy=True), rate)
+    fade = min(clip.size // 4, int(rate * 0.006))
+    if fade > 1:
+        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        clip[:fade] *= ramp
+        clip[-fade:] *= ramp[::-1]
+    ending = text.rstrip()[-1:] if text.strip() else ""
+    kind = "sentence" if ending in ".!?" else "clause" if ending in ",;:-" else "none"
+    pause = np.zeros(int(rate * PAUSE_AFTER_S[kind]), dtype=np.float32)
+    return np.concatenate([clip, pause])
 
 
 class Synthesizer:
@@ -224,7 +341,7 @@ class Synthesizer:
                 if cached is not None:
                     self._cache.move_to_end(key)
                     return cached
-        audio = self._synthesize_with_fallback(text)
+        audio = join_smoothly(self._synthesize_with_fallback(text), text, self.output_rate)
         if len(text) <= self.CACHE_MAX_CHARS and audio.size:
             with self._cache_lock:
                 self._cache[key] = audio
@@ -266,10 +383,10 @@ class Synthesizer:
                 log.debug("prewarm failed for %r", phrase, exc_info=True)
 
 
-def build_synthesizer(settings: TTSSettings, temp_dir: Path) -> Synthesizer:
+def build_synthesizer(settings: TTSSettings, temp_dir: Path, models_dir: Path | None = None) -> Synthesizer:
     engines: list[TTSEngine] = []
     if settings.engine == "melo":
-        engines.append(MeloEngine(settings))
+        engines.append(MeloEngine(settings, models_dir))
     if settings.engine == "sapi" or settings.fallback:
         engines.append(SapiEngine(settings, temp_dir))
     return Synthesizer(engines)
