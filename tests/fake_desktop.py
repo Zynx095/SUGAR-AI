@@ -429,6 +429,9 @@ class FakeDesktop:
 
     def mouse_move(self, x: int, y: int) -> None:
         self.mouse.append(("move", x, y))
+        self.pointer = (x, y)
+
+    pointer: tuple[int, int] = (0, 0)
 
     def mouse_button(self, button: str, *, up: bool) -> None:
         self.mouse.append(("up" if up else "down", button))
@@ -437,7 +440,7 @@ class FakeDesktop:
         self.mouse.append(("wheel", clicks, horizontal))
 
     def cursor(self) -> tuple[int, int]:
-        return (0, 0)
+        return self.pointer
 
     # ------------------------------------------------------------------ UI Automation snapshot (semantic clicks)
 

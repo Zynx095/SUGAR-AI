@@ -168,7 +168,8 @@ def parse_type(raw: str, view: DesktopView, resolve_app: Callable[[str], Any] | 
 
 _VERBS = (r"(?:open|launch|start|close|quit|exit|kill|force|type|write|press|hit|switch|go|minimi[sz]e|maximi[sz]e|"
           r"restore|bring|search|google|play|pause|resume|stop|skip|save|select|copy|paste|undo|redo|delete|scroll|"
-          r"reload|refresh|navigate|reopen|mute|unmute|turn|set|focus|show|snap|move|put|click|zoom|new tab)")
+          r"reload|refresh|navigate|reopen|mute|unmute|turn|set|focus|show|snap|move|put|click|zoom|new tab|draw|sketch|"
+          r"colou?r|fill|read|take|describe|dictate|choose|pick|tick|add|make)")
 _SPLIT = re.compile(
     rf"(?:\s*[,;]\s*(?:and\s+)?(?:then\s+)?|\s+(?:and\s+then|and\s+also|and\s+after\s+that|after\s+that|and|then)\s+"
     rf"|\.\s+(?:then\s+|and\s+)?)(?={_VERBS}\b)",
@@ -404,7 +405,7 @@ def match_clause(text: str, raw: str, view: DesktopView, resolve_app: Callable[[
     """Computer-control rules for one normalised clause (``raw`` keeps the original casing)."""
     t = text
     # ---------------------------------------------------------------- scrolling, pointing, seeing
-    found = match_writing(t, raw, view) or match_perception(t, view)
+    found = match_paint(t, raw, view) or match_writing(t, raw, view) or match_perception(t, view)
     if found is not None:
         return found
     # ---------------------------------------------------------------- browser tabs
@@ -593,6 +594,60 @@ _AMOUNT = {" a little": "little", " a bit": "little", " a tiny bit": "little", "
 
 
 _EDITORS = {"notepad", "wordpad", "winword", "word", "code", "notepad++", "obsidian", "onenote", "soffice"}
+
+
+_DRAW = _r(r"(?:(?:can you |please )?(?:draw|sketch|doodle)|paint)(?: me| us)? (?P<subject>(?:a|an|the|some|two|three)"
+           r" .+?|.+?)(?: (?P<place>beside it|next to it|to the right(?: of it)?|on the right|to the left(?: of it)?|on the"
+           r" left|above it|below it|under it|underneath))?(?: (?:in|on|using) (?:ms |microsoft )?paint)?(?: please)?")
+_PAINT_CLEAN = _r(r"make it (?:cleaner|neater|tidier|simpler)|clean (?:it|that|the drawing) up|tidy (?:it|that) up|"
+                  r"clean up the drawing|redraw it (?:cleaner|more cleanly|neater)")
+_PAINT_FILL = _r(r"(?:add|put in) (?:some )?colou?r(?: to it)?|colou?r it(?: in)?(?: (?P<c1>[a-z ]+?))?|fill it(?: in)?"
+                 r"(?: with (?P<c2>[a-z ]+?))?|make it (?P<c3>red|orange|yellow|green|blue|light blue|purple|pink|brown|"
+                 r"black|gray|grey|gold|turquoise|dark red|dark green)|paint it (?P<c4>[a-z ]+?)")
+_PAINT_THICKER = _r(r"make the (?:outline|lines?|edges?|strokes?) thicker|thicker (?:outline|lines?)|make it bolder|"
+                    r"(?:use a )?thicker (?:pencil|brush)")
+_PAINT_UNDO = _r(r"(?:undo|remove|delete|erase) (?:the )?last (?:shape|drawing|thing (?:you|i) drew)|undo the last thing you drew")
+_PAINT_SAVE = _r(r"save (?:this|it|that|the drawing|the picture|the image|my drawing)? ?(?:as|to|called|named) (?P<name>.+)")
+_PAINT_NEW = _r(r"(?:start )?(?:a )?new (?:drawing|picture|canvas)|clear the canvas|start over|wipe the canvas")
+_PLACES = {"beside it": "right", "next to it": "right", "to the right": "right", "to the right of it": "right",
+           "on the right": "right", "to the left": "left", "to the left of it": "left", "on the left": "left",
+           "above it": "above", "below it": "below", "under it": "below", "underneath": "below"}
+_NOT_DRAWABLE = _r(r"(?:a )?(?:conclusion|conclusions|attention|breath|blank|line under .+|the curtains|the line|a bath|"
+                   r"blood|water|lots|straws|cards?|a card|a gun|money|cash|fire|crowds?|comparisons?|inspiration|"
+                   r"the short straw)")
+
+
+def match_paint(t: str, raw: str, view: DesktopView) -> Intent | None:
+    """Drawing in Paint, and follow-ups while Paint is open or in front."""
+    in_paint = (view.active_app or "").lower() in ("paint", "mspaint") or view.paint_open
+    match = _DRAW.fullmatch(t)
+    if match:
+        subject = match.group("subject").strip()
+        explicit = "paint" in t.split() or in_paint or re.match(r"(?:a|an|the|some|two|three) ", subject)
+        if explicit and not _NOT_DRAWABLE.fullmatch(subject) and len(subject.split()) <= 6:
+            args: dict[str, Any] = {"subject": subject}
+            if match.group("place"):
+                args["place"] = _PLACES.get(match.group("place"), "right")
+            return _call("paint.draw", "paint.draw", args, t)
+    if not in_paint:
+        return None
+    if _PAINT_CLEAN.fullmatch(t):
+        return _call("paint.clean", "paint.clean", {}, t)
+    match = _PAINT_FILL.fullmatch(t)
+    if match:
+        colour = next((g for g in match.groups() if g), None)
+        return _call("paint.fill", "paint.fill", {"colour": colour.strip()} if colour else {}, t)
+    if _PAINT_THICKER.fullmatch(t):
+        return _call("paint.thicker", "paint.thicker", {}, t)
+    if _PAINT_UNDO.fullmatch(t):
+        return _call("paint.undo", "paint.undo", {}, t)
+    match = _PAINT_SAVE.fullmatch(t)
+    if match:
+        name = re.search(r"(?:as|to|called|named) (.+)$", raw.strip().rstrip(".!"), re.I)
+        return _call("paint.save", "paint.save", {"name": (name.group(1) if name else match.group("name")).strip()}, t)
+    if _PAINT_NEW.fullmatch(t):
+        return _call("paint.new", "paint.new", {}, t)
+    return None
 
 
 def match_writing(t: str, raw: str, view: DesktopView) -> Intent | None:

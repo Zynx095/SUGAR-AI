@@ -12,6 +12,7 @@ from sugar.tools import (
     filesystem,
     media,
     memory_tools,
+    paint,
     perception,
     terminal,
     web,
@@ -35,7 +36,7 @@ def _register_calculator(registry: ToolRegistry) -> None:
 
 def build_registry(services: ToolServices) -> ToolRegistry:
     registry = ToolRegistry()
-    for module in (desktop, computer, perception, browser, web, media, filesystem, terminal, memory_tools,
+    for module in (desktop, computer, perception, paint, browser, web, media, filesystem, terminal, memory_tools,
                    coding_tools):
         module.register(registry, services)
     _register_calculator(registry)

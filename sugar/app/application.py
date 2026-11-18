@@ -182,6 +182,7 @@ class SIDApp:
             scrolling=self.computer.scroller.scrolling,
             camera_on=self.computer.camera.active,
             dictating=self.dictation.active,
+            paint_open=any(w.process.lower() == "mspaint.exe" for w in context.recent_windows()[:8]),
         )
 
     def _extra_context(self) -> str:
