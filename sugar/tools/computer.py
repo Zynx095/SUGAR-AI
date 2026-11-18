@@ -315,17 +315,9 @@ def register(registry: ToolRegistry, services: ToolServices) -> None:
         return result.to_tool_result()
 
     async def ui_click(args: dict[str, Any]) -> ToolResult:
-        def invoke() -> ComputerActionResult:
-            window = computer.windows.resolve(args.get("target"))
-            if window is None:
-                return ComputerActionResult.fail("ui.click", None, "There's no window to click in.")
-            clicked = computer.backend.invoke(window.hwnd, args["name"])
-            if clicked is None:
-                return ComputerActionResult.fail("ui.click", window.app, f"I can't find {args['name']} there.")
-            computer.context.note_action("ui.click", window)
-            return ComputerActionResult(True, "ui.click", window.app, f"Clicked {clicked[:60]}.", False, None, {})
-
-        result = await run(invoke)
+        # Describe-and-click: a fresh UI Automation snapshot, one unambiguous match, act, verify.
+        result = await run(computer.interact.click, str(args["name"]), args.get("target"),
+                           str(args.get("action") or "click"))
         return result.to_tool_result()
 
     async def scroll(args: dict[str, Any]) -> ToolResult:
@@ -344,8 +336,12 @@ def register(registry: ToolRegistry, services: ToolServices) -> None:
                            L.READ, 20, COMPUTER))
     registry.register(Tool("screen.look", "Describe what's visible on screen (needs a vision model).",
                            params(question={"type": "string"}), look, L.READ, 60, COMPUTER))
-    registry.register(Tool("ui.click", "Click a button, link, tab or menu item by its visible name in a window.",
-                           params(["name"], name={"type": "string"}, target=TARGET), ui_click, click_level, 15,
+    registry.register(Tool("ui.click", "Click, select or tick a control described in words: its visible name ('Save'), "
+                           "kind and position ('the second option', 'the checkbox', 'the search box', 'the first "
+                           "result', 'the option on the left'). Asks when several match.",
+                           params(["name"], name={"type": "string"}, target=TARGET,
+                                  action={"type": "string", "enum": ["click", "select", "toggle", "focus", "expand"],
+                                          "default": "click"}), ui_click, click_level, 15,
                            COMPUTER, describe=lambda a: f"click “{a.get('name')}”"))
     registry.register(Tool("screen.click", "Click at screen coordinates or on a named element (left/right/double).",
                            params(x={"type": "integer"}, y={"type": "integer"}, element={"type": "string"},

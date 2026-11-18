@@ -23,13 +23,18 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from sugar.computer.apps import AppCatalog, ApplicationController
 from sugar.computer.backend import DesktopBackend, NullDesktop
 from sugar.computer.browser import BrowserController, BrowserRegistry
+from sugar.computer.camera import Camera
 from sugar.computer.context import DesktopContext
+from sugar.computer.guard import idle_seconds
+from sugar.computer.interact import InteractionController
 from sugar.computer.keyboard import KeyboardController, TypingSettings
 from sugar.computer.keys import VK_CONTROL
 from sugar.computer.media import MediaController
 from sugar.computer.results import ComputerActionResult
 from sugar.computer.screen import ScreenController
+from sugar.computer.scroll import ScrollController
 from sugar.computer.spotify import SpotifyController
+from sugar.computer.vision import LocalVision, ScreenVision, WindowsOcr
 from sugar.computer.windows import WindowManager, display_name, is_browser
 from sugar.computer.youtube import YouTubeSearch
 
@@ -90,6 +95,18 @@ class ComputerControl:
                                          launch_timeout_s=cfg.launch_timeout_s)
         self.screen = ScreenController(self.backend, self.windows, self.context,
                                        settings.paths.data_dir / "screenshots")
+        self.ocr = WindowsOcr() if cfg.ocr else None
+        llm = settings.llm.ollama
+        self.vision = (LocalVision(llm.base_url, cfg.vision_model, max_side=cfg.vision_max_side)
+                       if cfg.vision_model and llm.enabled else None)
+        self.screen.vision = ScreenVision(self.vision) if self.vision is not None else self.screen.vision
+        self.camera = Camera(index=cfg.camera_index, folder=settings.paths.data_dir / "camera",
+                             idle_release_s=cfg.camera_idle_release_s, on_change=self._camera_changed)
+        self._bus: EventBus | None = None
+        self.interact = InteractionController(self.backend, self.windows, self.context, ocr=self._ocr_window,
+                                              locate=self._locate_window)
+        self.scroller = ScrollController(self.backend, self.windows, self.context,
+                                         idle=idle_seconds if self.available else None)
         self.youtube = YouTubeSearch(settings.secret(cfg.youtube_api_key_env), cfg.youtube_region)
         self.media = MediaController(self, spotify, self.youtube, music_platform=cfg.music_platform,
                                      pause_other_media=cfg.pause_other_media)
@@ -114,7 +131,34 @@ class ComputerControl:
 
     # ------------------------------------------------------------------ lifecycle
 
+    # ------------------------------------------------------------------ seeing
+
+    def window_image(self, window):
+        """A fresh screenshot of a window's rectangle (PIL image) — never a stored one."""
+        from PIL import ImageGrab
+
+        left, top, right, bottom = window.rect
+        return ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True)
+
+    def _ocr_window(self, window) -> list:
+        if self.ocr is None or not self.ocr.available:
+            return []
+        return self.ocr.elements(self.window_image(window), origin=(window.rect[0], window.rect[1]))
+
+    def _locate_window(self, window, description: str):
+        if self.vision is None or not self.vision.available:
+            return None
+        point = self.vision.locate(self.window_image(window), description)
+        if point is None:
+            return None
+        return point[0] + window.rect[0], point[1] + window.rect[1]
+
+    def _camera_changed(self, active: bool, device: str | None) -> None:
+        if self._bus is not None:
+            self._bus.publish("camera.state", active=active, device=device)
+
     def start(self, bus: EventBus | None = None) -> None:
+        self._bus = bus
         if not self.available:
             return
         try:
@@ -128,6 +172,7 @@ class ComputerControl:
         if bus is not None:
             def on_cancel(_event) -> None:
                 self.cancel()
+                self.scroller.stop_continuous()
 
             self._unsubscribe = bus.subscribe("turn.cancelled", on_cancel)
 
@@ -136,6 +181,8 @@ class ComputerControl:
             self._unsubscribe()
             self._unsubscribe = None
         self.cancel()
+        self.scroller.stop_continuous()
+        self.camera.close()  # never leave the camera on
         self.context.stop()
         if self._pool is not None:
             try:

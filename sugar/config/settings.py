@@ -208,6 +208,17 @@ class ComputerSettings(BaseModel):
     pause_other_media: bool = True  # starting YouTube pauses Spotify (and vice versa)
     youtube_api_key_env: str = "YOUTUBE_API_KEY"  # optional: YouTube Data API v3 for search
     youtube_region: str = ""  # e.g. "IN"; empty = YouTube's default for this connection
+    # Seeing: Windows OCR plus a local vision-language model on the managed Ollama (models on D:). Screens and
+    # camera frames never leave this PC.
+    ocr: bool = True
+    vision_model: str = "qwen3-vl:4b"  # "" turns the vision model off
+    vision_max_side: int = 1280
+    camera: bool = True
+    camera_index: int | None = None  # None: the first camera that opens
+    camera_idle_release_s: float = 120.0
+    # Drawing in Paint: references come from Wikimedia Commons (free licences only).
+    paint_reference_source: Literal["commons", "none"] = "commons"
+    paint_show_reference: bool = False  # also open the chosen reference's page in the browser
 
 
 class SpotifySettings(BaseModel):

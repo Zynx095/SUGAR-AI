@@ -336,3 +336,167 @@ class Accessibility:
                 "offscreen": bool(self._safe(lambda e=element: e.CurrentIsOffscreen, False)),
             })
         return described
+
+    # ------------------------------------------------------------------ snapshots (semantic clicking, scrolling)
+
+    _PROP = {  # UIA property ids (constants from UIAutomationClient.h)
+        "name": 30005, "type": 30003, "rect": 30001, "enabled": 30010, "offscreen": 30022, "aid": 30011,
+        "help": 30013, "invoke": 30031, "toggle": 30041, "select": 30036, "expand": 30028, "value": 30043,
+        "scroll": 30034, "text": 30040, "toggle_state": 30086, "selected": 30079, "expand_state": 30070,
+        "value_value": 30045,
+    }
+
+    def snapshot(self, hwnd: int, limit: int = 1500) -> list[Any]:
+        """Every element in the window's control view (web pages included), with the properties needed to pick
+        one by description. Returns :class:`sugar.computer.elements.Element` objects; their ids index a cache
+        that :meth:`act` uses, valid until the next snapshot of this window."""
+        import time as _time
+
+        from sugar.computer.elements import Element
+
+        auto, U = self._client()
+        root = self._element(hwnd)
+        if root is None:
+            return []
+        request = auto.CreateCacheRequest()
+        for prop in self._PROP.values():
+            self._safe(lambda p=prop: request.AddProperty(p))
+        request.TreeFilter = auto.ControlViewCondition
+        found = self._safe(lambda: root.FindAllBuildCache(U.TreeScope_Descendants, auto.ControlViewCondition, request))
+        raws: list[Any] = []
+        if found is not None:
+            raws = [found.GetElement(i) for i in range(min(found.Length, limit))]
+        elements, handles = [], {}
+        for index, raw in enumerate(raws):
+            def cached(key: str, default: Any = None, r: Any = raw) -> Any:
+                return self._safe(lambda: r.GetCachedPropertyValue(self._PROP[key]), default)
+
+            rect = cached("rect")
+            try:
+                left, top, width, height = (int(v) for v in rect)
+            except (TypeError, ValueError):
+                continue
+            kind = CONTROL_TYPES.get(cached("type", 0), "unknown")
+            patterns = frozenset(k for k in ("invoke", "toggle", "select", "expand", "value", "scroll", "text")
+                                 if cached(k, False))
+            toggle_state = cached("toggle_state") if "toggle" in patterns else None
+            expand_state = cached("expand_state") if "expand" in patterns else None
+            elements.append(Element(
+                id=index, name=str(cached("name", "") or ""), kind=kind, rect=(left, top, left + width, top + height),
+                enabled=bool(cached("enabled", True)), offscreen=bool(cached("offscreen", False)), patterns=patterns,
+                toggled=None if toggle_state is None else toggle_state == 1,
+                selected=bool(cached("selected")) if "select" in patterns else None,
+                expanded=None if expand_state is None else expand_state in (1, 2),
+                value=str(cached("value_value") or "") if "value" in patterns else None,
+                automation_id=str(cached("aid", "") or ""), help=str(cached("help", "") or "")))
+            handles[index] = raw
+        self._snapshots[hwnd] = (_time.monotonic(), handles)
+        return elements
+
+    @property
+    def _snapshots(self) -> dict[int, Any]:
+        if not hasattr(self, "_snapshot_store"):
+            self._snapshot_store: dict[int, Any] = {}
+        return self._snapshot_store
+
+    def _handle(self, hwnd: int, element_id: int) -> Any | None:
+        entry = self._snapshots.get(hwnd)
+        return entry[1].get(element_id) if entry else None
+
+    def act(self, hwnd: int, element_id: int, action: str = "click") -> str | None:
+        """Activate a snapshot element without moving the mouse. Returns the method used, or None."""
+        element = self._handle(hwnd, element_id)
+        if element is None:
+            return None
+        order = {"click": ("invoke", "toggle", "selection_item", "expand", "legacy"),
+                 "select": ("selection_item", "invoke", "toggle", "legacy"),
+                 "toggle": ("toggle", "invoke", "legacy"),
+                 "expand": ("expand", "invoke"),
+                 "focus": ()}[action]
+        methods = {"invoke": "Invoke", "selection_item": "Select", "toggle": "Toggle", "expand": "Expand",
+                   "legacy": "DoDefaultAction"}
+        for pattern in order:
+            handle = self._pattern(element, pattern)
+            if handle is not None and self._safe(lambda h=handle, m=methods[pattern]: getattr(h, m)() or True, False):
+                return pattern
+        if self._safe(lambda: element.SetFocus() or True, False):
+            return "focus"
+        return None
+
+    def element_state(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        element = self._handle(hwnd, element_id)
+        if element is None:
+            return None
+        state: dict[str, Any] = {"alive": self._safe(lambda: element.CurrentProcessId, None) is not None}
+        toggle = self._pattern(element, "toggle")
+        if toggle is not None:
+            state["toggled"] = self._safe(lambda: toggle.CurrentToggleState) == 1
+        selection = self._pattern(element, "selection_item")
+        if selection is not None:
+            state["selected"] = bool(self._safe(lambda: selection.CurrentIsSelected, False))
+        expand = self._pattern(element, "expand")
+        if expand is not None:
+            state["expanded"] = self._safe(lambda: expand.CurrentExpandCollapseState) in (1, 2)
+        state["focused"] = bool(self._safe(lambda: element.CurrentHasKeyboardFocus, False))
+        return state
+
+    def _scroll_pattern(self, element: Any) -> Any | None:
+        _, U = self._client()
+        try:
+            raw = element.GetCurrentPattern(10004)  # UIA_ScrollPatternId
+            return raw.QueryInterface(U.IUIAutomationScrollPattern) if raw else None
+        except Exception:
+            return None
+
+    def scroll_info(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        element = self._handle(hwnd, element_id)
+        pattern = self._scroll_pattern(element) if element is not None else None
+        if pattern is None:
+            return None
+        return {"vertical": bool(self._safe(lambda: pattern.CurrentVerticallyScrollable, False)),
+                "horizontal": bool(self._safe(lambda: pattern.CurrentHorizontallyScrollable, False)),
+                "v_percent": float(self._safe(lambda: pattern.CurrentVerticalScrollPercent, -1.0)),
+                "h_percent": float(self._safe(lambda: pattern.CurrentHorizontalScrollPercent, -1.0)),
+                "v_view": float(self._safe(lambda: pattern.CurrentVerticalViewSize, 100.0))}
+
+    def scroll(self, hwnd: int, element_id: int, *, vertical: int = 2, horizontal: int = 2,
+               v_percent: float | None = None, h_percent: float | None = None) -> bool:
+        """ScrollPattern: amounts are UIA ScrollAmount (0 large back, 1 small back, 2 none, 3 large on, 4 small on);
+        or jump to a percentage (0 = top/left, 100 = bottom/right)."""
+        element = self._handle(hwnd, element_id)
+        pattern = self._scroll_pattern(element) if element is not None else None
+        if pattern is None:
+            return False
+        if v_percent is not None or h_percent is not None:
+            return bool(self._safe(lambda: pattern.SetScrollPercent(-1.0 if h_percent is None else h_percent,
+                                                                     -1.0 if v_percent is None else v_percent) or True,
+                                   False))
+        return bool(self._safe(lambda: pattern.Scroll(horizontal, vertical) or True, False))
+
+    def focused_scrollable(self, hwnd: int) -> Any | None:
+        """Bounding rect of the nearest scrollable ancestor of the focused element (the "this document" target)."""
+        auto, _ = self._client()
+        element = self._safe(lambda: auto.GetFocusedElement())
+        walker = auto.ControlViewWalker
+        for _ in range(12):
+            if element is None or not element:
+                return None
+            pattern = self._scroll_pattern(element)
+            if pattern is not None and self._safe(lambda p=pattern: p.CurrentVerticallyScrollable, False):
+                rect = self._safe(lambda e=element: e.CurrentBoundingRectangle)
+                return (rect.left, rect.top, rect.right, rect.bottom) if rect is not None else None
+            element = self._safe(lambda e=element: walker.GetParentElement(e))
+        return None
+
+    def find_text(self, hwnd: int, text: str, *, backward: bool = True, select: bool = True) -> bool:
+        """Find ``text`` in the focused document (TextPattern) and select it — for "replace that word with…"."""
+        auto, _ = self._client()
+        element = self._safe(lambda: auto.GetFocusedElement())
+        pattern = self._pattern(element, "text") if element is not None else None
+        if pattern is None:
+            return False
+        document = self._safe(lambda: pattern.DocumentRange)
+        found = self._safe(lambda: document.FindText(text, int(backward), 1)) if document is not None else None
+        if not found:
+            return False
+        return bool(self._safe(lambda: found.Select() or True, False)) if select else True

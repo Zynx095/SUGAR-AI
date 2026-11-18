@@ -462,6 +462,27 @@ class WindowsDesktop:
     def describe_ui(self, hwnd: int, limit: int = 150) -> list[dict[str, Any]]:
         return self.uia.describe_ui(hwnd, limit)
 
+    def snapshot(self, hwnd: int, limit: int = 1500) -> list[Any]:
+        return self.uia.snapshot(hwnd, limit)
+
+    def act(self, hwnd: int, element_id: int, action: str = "click") -> str | None:
+        return self.uia.act(hwnd, element_id, action)
+
+    def element_state(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        return self.uia.element_state(hwnd, element_id)
+
+    def scroll_info(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        return self.uia.scroll_info(hwnd, element_id)
+
+    def scroll(self, hwnd: int, element_id: int, **kwargs: Any) -> bool:
+        return self.uia.scroll(hwnd, element_id, **kwargs)
+
+    def focused_scrollable(self, hwnd: int) -> Any:
+        return self.uia.focused_scrollable(hwnd)
+
+    def find_text(self, hwnd: int, text: str, *, backward: bool = True, select: bool = True) -> bool:
+        return self.uia.find_text(hwnd, text, backward=backward, select=select)
+
     # ------------------------------------------------------------------ media sessions (SMTC)
 
     async def _sessions(self) -> list[tuple[Any, MediaSession]]:

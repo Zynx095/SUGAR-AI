@@ -223,6 +223,57 @@ _RELOAD = _r(r"(?:reload|refresh)(?: the| this)?(?: page| tab| site| website| it
 _SCROLL = _r(r"scroll (?P<dir>down|up)(?: (?:a bit|a little|more|some))?(?: (?P<n>\d+|one|two|three|four|five) "
              r"(?:times|pages|screens))?|page (?P<pdir>down|up)|(?:scroll|go|jump) to the (?P<edge>top|bottom) of the page|"
              r"scroll to the (?P<edge2>top|bottom)")
+# General scrolling (any app; ui.scroll picks the scrollable area)
+_SCROLL_STOP = _r(r"stop scrolling|(?:that's|thats|that is) enough scrolling|stop the scroll(?:ing)?|"
+                  r"(?:ok |okay )?stop (?:the )?auto ?scroll(?:ing)?")
+_SCROLL_KEEP = _r(r"(?:keep scrolling|scroll (?:continuously|automatically|non ?stop|until i say stop)|auto ?scroll)"
+                  r"(?: (?P<dir>down|up|left|right))?(?: (?P<speed>slowly|slow|quickly|fast))?"
+                  r"(?: (?:continuously|until i say stop))?")
+_SCROLL_SLOW = _r(r"scroll (?:(?P<dir>down|up) )?(?P<speed>slowly|slow|quickly|fast)(?: (?P<dir2>down|up))?"
+                  r"(?: (?:continuously|until i say stop))?")
+_SCROLL_ANY = _r(r"scroll(?: the page| it| this)? (?P<dir>down|up|left|right)(?P<amt> a (?:little|bit|tiny bit|"
+                 r"little bit|touch)| slightly| a lot| lots| more| further| some| a page| one page| a screen| "
+                 r"(?:a )?bit more| way down| a lot more)?(?: (?P<n>\d+|one|two|three|four|five) (?:times|pages|"
+                 r"screens))?(?: (?:in|inside|within|on|in the|on the) (?P<where>.+))?")
+_SCROLL_EDGE = _r(r"(?:scroll|go|jump|take me) (?:all the way )?(?:to|up to|down to) the (?P<edge>top|bottom|end|start|"
+                  r"beginning)(?: of (?:the |this )?(?:page|document|list|file|chat|thread|window))?")
+_PAGE_KEY = _r(r"page (?P<dir>down|up)")
+_SCROLL_IN = _r(r"scroll (?:in|inside|within|on|through) (?P<where>.+)")
+_PICK = _r(r"(?:select|choose|pick|tick|check|uncheck|untick|toggle|open) (?:on )?(?P<target>(?:the )?(?:(?:first|"
+           r"second|third|fourth|fifth|sixth|seventh|last|top|1st|2nd|3rd|4th|5th) )?(?:option|result|item|choice|"
+           r"entry|check ?box|tick box|radio button|link|button|one)(?:s)?\b.*|(?:the )?.+? (?:option|check ?box|"
+           r"tick box|radio button|choice|toggle|switch))")
+_CHOOSE_PENDING = _r(r"(?:the |that )?(?P<ord>first|second|third|fourth|fifth|sixth|last|top|bottom|1st|2nd|3rd)(?: one)?"
+                     r"(?: please)?|(?:number|option) (?P<num>one|two|three|four|five|six|\d)")
+_WHERE = _r(r"where(?:'s| is| are)(?: the| my)? (?P<target>.+?)(?: on (?:the |my )?screen| in this window| here)?|"
+            r"(?:find|locate|show me) the (?P<target2>.+?(?:button|box|field|bar|link|menu|tab|icon|option|checkbox))")
+_READ_SCREEN = _r(r"(?:read|read out|read me|tell me)(?: what(?:'s| is| it says)?)?(?: the)? (?:text |words )?(?:in|on|of)"
+                  r" (?:this|the|my)? ?(?:window|screen|page|dialog|app|document|message)|read (?:this|that|the screen|"
+                  r"the window|this window|the dialog|it)(?: to me| out| aloud)?|what does (?:this|the) (?:screen|window|"
+                  r"page|message|popup|pop up) say")
+_WHAT_ON_SCREEN = _r(r"what(?:'s| is) (?:open )?on (?:my|the) screen(?: right now)?|what(?:'s| is| do you see) on (?:my|the) "
+                     r"screen|what can you see on (?:my|the) screen|describe (?:my|the) screen|look at (?:my|the) screen")
+_ASK_SCREEN = _r(r"(?P<q>what (?:error|warning|message|problem)(?: is| are)? (?:displayed|shown|showing|on (?:the |my )?screen|"
+                 r"here|this)|explain what this (?:dialog|popup|pop up|window|message|prompt|box|error) (?:is )?(?:asking|"
+                 r"saying|means|wants)|what (?:is|does) this (?:dialog|popup|pop up|window|message|prompt|error) "
+                 r"(?:asking|saying|mean|want)|what should i do next|what do i do (?:now|next|here)|what am i looking "
+                 r"at on (?:the |my )?screen|is there an error(?: on (?:the |my )?screen)?)")
+_WHAT_CLICKABLE = _r(r"what can i click(?: here| on)?|what (?:buttons|options|controls) (?:are there|do (?:i|you) see|"
+                     r"can (?:i|you) see)(?: here| in this window)?")
+_CAMERA_ON = _r(r"(?:turn|switch) on (?:the |your |my )?(?:camera|webcam)|(?:turn|switch) (?:the |your |my )?(?:camera|"
+                r"webcam) on|(?:open|start|activate|enable) (?:the |your |my )?(?:camera|webcam)")
+_CAMERA_OFF = _r(r"(?:turn|switch) off (?:the |your |my )?(?:camera|webcam)|(?:turn|switch) (?:the |your |my )?(?:camera|"
+                 r"webcam) off|(?:close|stop|deactivate|disable|release) (?:the |your |my )?(?:camera|webcam)")
+_CAMERA_PHOTO = _r(r"(?:take|snap|capture) (?:a |another )?(?:picture|photo|selfie|snapshot)(?: (?:with|using) (?:the |your )?"
+                   r"(?:camera|webcam))?")
+_CAMERA_LOOK = _r(r"(?P<q>what (?:do|can) you see(?: (?:now|in front of (?:me|you)|through the camera|on the camera))?|"
+                  r"(?:look|check)(?: at this)? (?:with|through|using) (?:the |your )?camera|"
+                  r"describe (?:what(?:'s| is) in front of me|this object|this|the room|what you see|my surroundings)|"
+                  r"(?:can you )?(?:identify|recogni[sz]e) this(?: object| thing| device)?|what is this (?:object|thing|"
+                  r"device)|(?:read|what does) (?:the text on )?this (?:paper|page|note|document|label|sign)(?: say)?|"
+                  r"read (?:this|the) (?:paper|page|note|document|label|sign)|what am i holding)")
+_CAMERA_DEVICES = _r(r"(?:what|which|list(?: the)?) (?:cameras|webcams)(?: do (?:i|you) have| are (?:there|connected))?")
+
 _ZOOM = _r(r"zoom (?P<how>in|out)|(?:reset|normal) (?:the )?zoom|reset the zoom")
 _URL_WHAT = _r(r"what(?:'s| is) (?:the |this )?(?:url|link|address|web ?site|page)(?: of this page| i'm on)?|"
                r"what (?:page|site|website) (?:is this|am i on)")
@@ -335,6 +386,10 @@ def match_dialog(text: str, view: DesktopView) -> Intent | None:
 def match_clause(text: str, raw: str, view: DesktopView, resolve_app: Callable[[str], Any] | None) -> Intent | None:
     """Computer-control rules for one normalised clause (``raw`` keeps the original casing)."""
     t = text
+    # ---------------------------------------------------------------- scrolling, pointing, seeing
+    found = match_perception(t, view)
+    if found is not None:
+        return found
     # ---------------------------------------------------------------- browser tabs
     match = _NEW_TAB.match(t)
     if match:
@@ -373,12 +428,10 @@ def match_clause(text: str, raw: str, view: DesktopView, resolve_app: Callable[[
     if _RELOAD.match(t):
         return _call("browser.reload", "browser.reload", {}, t)
     match = _SCROLL.match(t)
-    if match:
+    if match:  # (general scrolling is matched earlier by match_perception; this catches leftovers)
         edge = match.group("edge") or match.group("edge2")
         direction = edge or match.group("dir") or match.group("pdir") or "down"
-        amount = match.group("n")
-        count = int(amount) if amount and amount.isdigit() else _ORDINALS.get(amount or "", 1)
-        return _call("browser.scroll", "browser.scroll", {"direction": direction, "amount": count}, t)
+        return _call("ui.scroll", "ui.scroll", {"direction": direction}, t)
     match = _ZOOM.match(t)
     if match:
         return _call("browser.zoom", "browser.zoom", {"how": match.group("how") or "reset"}, t)
@@ -497,6 +550,116 @@ def match_clause(text: str, raw: str, view: DesktopView, resolve_app: Callable[[
         name = match.group("name").strip()
         if name and len(name.split()) <= 6:
             return _call("ui.click", "ui.click", {"name": name}, t)
+    return None
+
+
+_REGION_WORDS = {"left": "left", "right": "right", "top": "top", "bottom": "bottom", "middle": "center", "center": "center",
+                 "centre": "center", "side": None}
+
+
+def _scroll_where(where: str | None) -> dict[str, Any]:
+    if not where:
+        return {}
+    where = where.strip()
+    for word, region in _REGION_WORDS.items():
+        if region and re.search(rf"\b{word}\b", where):
+            return {"region": region}
+    if re.search(r"\b(?:document|page|text|file|editor|this)\b", where):
+        return {"inside": "document"}
+    return {"target": re.sub(r"^(?:the|this|that|my) ", "", where)}
+
+
+_AMOUNT = {" a little": "little", " a bit": "little", " a tiny bit": "little", " a little bit": "little",
+           " slightly": "little", " a touch": "little", " a lot": "more", " lots": "more", " more": "more",
+           " further": "more", " a page": "more", " one page": "more", " a screen": "more", " bit more": "normal",
+           " a bit more": "normal", " way down": "more", " a lot more": "more", " some": "normal"}
+
+
+def match_perception(t: str, view: DesktopView) -> Intent | None:
+    """Scrolling, clicking by description, reading/asking about the screen, the camera."""
+    if _SCROLL_STOP.fullmatch(t) or (view.scrolling and t in ("stop", "stop it", "enough", "that's enough")):
+        return _call("ui.scroll_stop", "ui.scroll_stop", {}, t)
+    match = _SCROLL_KEEP.fullmatch(t)
+    if match:
+        speed = {"slowly": "slow", "slow": "slow", "quickly": "fast", "fast": "fast"}.get(match.group("speed") or "",
+                                                                                        "normal")
+        return _call("ui.scroll", "ui.scroll", {"direction": match.group("dir") or "down", "continuous": True,
+                                                "speed": speed}, t)
+    match = _SCROLL_SLOW.fullmatch(t)
+    if match:
+        speed = "slow" if match.group("speed") in ("slowly", "slow") else "fast"
+        direction = match.group("dir") or match.group("dir2") or "down"
+        return _call("ui.scroll", "ui.scroll", {"direction": direction, "continuous": True, "speed": speed}, t)
+    match = _SCROLL_EDGE.fullmatch(t)
+    if match:
+        edge = {"end": "bottom", "start": "top", "beginning": "top"}.get(match.group("edge"), match.group("edge"))
+        return _call("ui.scroll", "ui.scroll", {"direction": edge}, t)
+    match = _SCROLL_ANY.fullmatch(t)
+    if match:
+        args: dict[str, Any] = {"direction": match.group("dir")}
+        amount = _AMOUNT.get(match.group("amt") or "", "normal")
+        if amount != "normal":
+            args["amount"] = amount
+        count = match.group("n")
+        if count:
+            args["amount"] = "more"
+            args["times"] = int(count) if count.isdigit() else _ORDINALS.get(count, 1)
+        args.update(_scroll_where(match.group("where")))
+        return _call("ui.scroll", "ui.scroll", args, t)
+    match = _PAGE_KEY.fullmatch(t)
+    if match:
+        return _call("ui.scroll", "ui.scroll", {"direction": match.group("dir"), "amount": "more"}, t)
+    match = _SCROLL_IN.fullmatch(t)
+    if match:
+        return _call("ui.scroll", "ui.scroll", {"direction": "down", **_scroll_where(match.group("where"))}, t)
+    if view.choosing:
+        match = _CHOOSE_PENDING.fullmatch(t)
+        if match:
+            word = match.group("ord") or match.group("num")
+            ordinal = {"last": -1, "bottom": -1, "top": 1, "1st": 1, "2nd": 2, "3rd": 3}.get(word) or \
+                (int(word) if word.isdigit() else _ORDINALS.get(word, 1))
+            return _call("ui.choose", "ui.choose", {"ordinal": ordinal}, t)
+    if _CAMERA_OFF.fullmatch(t):
+        return _call("camera.off", "camera.off", {}, t)
+    if _CAMERA_ON.fullmatch(t):
+        return _call("camera.on", "camera.on", {}, t)
+    if _CAMERA_PHOTO.fullmatch(t):
+        return _call("camera.photo", "camera.photo", {}, t)
+    if _CAMERA_DEVICES.fullmatch(t):
+        return _call("camera.devices", "camera.devices", {}, t)
+    if not view.camera_on and re.fullmatch(r"what (?:do|can) you see(?: (?:now|right now))?", t):
+        return _call("screen.describe", "screen.describe", {}, t)  # the camera is off: SID's eyes are the screen
+    match = _CAMERA_LOOK.fullmatch(t)
+    if match and (view.camera_on or "camera" in t or "in front of me" in t or "holding" in t or "this object" in t
+                  or "paper" in t or "room" in t or "surroundings" in t):
+        question = None if t.startswith(("what do you see", "what can you see")) else t
+        return _call("camera.look", "camera.look", {"question": question} if question else {}, t)
+    if _WHAT_ON_SCREEN.fullmatch(t):
+        return _call("screen.describe", "screen.describe", {}, t)
+    if _READ_SCREEN.fullmatch(t):
+        return _call("screen.read", "screen.read", {}, t)
+    match = _ASK_SCREEN.fullmatch(t)
+    if match:
+        return _call("screen.ask", "screen.ask", {"question": t[:1].upper() + t[1:] + "?"}, t)
+    if _WHAT_CLICKABLE.fullmatch(t):
+        return _call("ui.controls", "ui.controls", {}, t)
+    match = _WHERE.fullmatch(t)
+    if match:
+        target = (match.group("target") or match.group("target2") or "").strip()
+        if target and not re.search(r"\b(?:you|i|we|they|he|she|my house|the nearest|in the world)\b", target) \
+                and len(target.split()) <= 7:
+            return _call("ui.where", "ui.where", {"name": target}, t)
+    match = _PICK.fullmatch(t)
+    if match:
+        target = match.group("target").strip()
+        verb = t.split(" ", 1)[0]
+        action = {"tick": "toggle", "check": "toggle", "uncheck": "toggle", "untick": "toggle",
+                  "toggle": "toggle"}.get(verb, "select" if verb in ("select", "choose", "pick") else "click")
+        if verb == "open" and re.match(r"(?:the )?(?:first|second|third|fourth|fifth|last|top|1st|2nd|3rd) "
+                                       r"(?:result|link|video)", target) and view.has_search:
+            return None  # the browser's search-result opener handles this one
+        args = {"name": target} if action == "click" else {"name": target, "action": action}
+        return _call("ui.click", "ui.click", args, t)
     return None
 
 

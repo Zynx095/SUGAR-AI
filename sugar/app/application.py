@@ -173,6 +173,9 @@ class SIDApp:
             has_search=bool(search and time.time() - search.ts < 1800),
             last_domain=last.domain if last and time.time() - last.ts < 600 else None,
             titles=tuple(w.title.lower() for w in context.recent_windows()[:8]),
+            choosing=bool(self.computer.interact.pending and self.computer.interact.pending.fresh),
+            scrolling=self.computer.scroller.scrolling,
+            camera_on=self.computer.camera.active,
         )
 
     def _extra_context(self) -> str:

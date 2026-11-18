@@ -86,7 +86,7 @@ def call(text: str, view: DesktopView | None = None):
         ("Go back.", ("browser.back", {})),
         ("Go forward.", ("browser.forward", {})),
         ("Reload the page.", ("browser.reload", {})),
-        ("scroll down", ("browser.scroll", {"direction": "down", "amount": 1})),
+        ("scroll down", ("ui.scroll", {"direction": "down"})),
         ("Search YouTube for Blinding Lights by The Weeknd.",
          ("browser.search", {"query": "blinding lights by the weeknd", "engine": "youtube"})),
         ("Search Google for PyTorch CUDA 12.8.", ("browser.search", {"query": "pytorch cuda 12.8", "engine": "google"})),
@@ -112,7 +112,7 @@ def test_computer_commands(text, expected):
 def test_browser_context_commands():
     assert call("Open the most relevant result.", BROWSER_VIEW) == ("browser.open_result", {"rank": "best"})
     assert call("play the second video", BROWSER_VIEW) == ("browser.open_result", {"rank": "second"})
-    assert call("go to the bottom of the page", BROWSER_VIEW) == ("browser.scroll", {"direction": "bottom", "amount": 1})
+    assert call("go to the bottom of the page", BROWSER_VIEW) == ("ui.scroll", {"direction": "bottom"})
     assert call("full screen", BROWSER_VIEW) == ("keyboard.press", {"keys": "f11", "times": 1})
     assert call("Open the most relevant result.") is None  # no search to pick from
 

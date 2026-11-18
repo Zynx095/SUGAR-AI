@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from sugar.tools import browser, coding_tools, computer, desktop, filesystem, media, memory_tools, terminal, web
+from sugar.tools import (
+    browser,
+    coding_tools,
+    computer,
+    desktop,
+    filesystem,
+    media,
+    memory_tools,
+    perception,
+    terminal,
+    web,
+)
 from sugar.tools.calculator import evaluate_spoken_math, format_number
 from sugar.tools.registry import PermissionLevel, Tool, ToolRegistry, ToolResult, params
 from sugar.tools.services import ToolServices
@@ -24,7 +35,8 @@ def _register_calculator(registry: ToolRegistry) -> None:
 
 def build_registry(services: ToolServices) -> ToolRegistry:
     registry = ToolRegistry()
-    for module in (desktop, computer, browser, web, media, filesystem, terminal, memory_tools, coding_tools):
+    for module in (desktop, computer, perception, browser, web, media, filesystem, terminal, memory_tools,
+                   coding_tools):
         module.register(registry, services)
     _register_calculator(registry)
     return registry

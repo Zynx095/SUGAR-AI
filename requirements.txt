@@ -40,6 +40,11 @@ winrt-runtime>=3.0
 winrt-Windows.Foundation>=3.0
 winrt-Windows.Foundation.Collections>=3.0
 winrt-Windows.Media.Control>=3.0
+winrt-Windows.Media.Ocr>=3.0          # on-device OCR (reading the screen)
+winrt-Windows.Graphics.Imaging>=3.0
+winrt-Windows.Storage.Streams>=3.0
+winrt-Windows.Globalization>=3.0
+opencv-python-headless>=4.10          # camera capture, drawing references
 pillow>=10.0            # screenshots
 pycaw>=20240210         # system volume
 
