@@ -449,6 +449,11 @@ class Orchestrator:
             return TurnSummary("desktop", tools=["calc"])
         if intent.name == "sequence":
             return await self._sequence(intent.slots["steps"], out)
+        if intent.name == "app.missing":
+            name = str(intent.slots.get("name", "")).strip()
+            out.say(f"I can't find an app called {name[:1].upper() + name[1:]} on this PC. If it's installed "
+                    "somewhere unusual, tell me where, or I can look for it online.")
+            return TurnSummary("desktop", ok=False)
         call = _desktop_call(intent, self._state)
         if call is None:
             return await self._operate(intent.text, RouteDecision(Route.DESKTOP, "grammar fallback",

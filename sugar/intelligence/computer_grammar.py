@@ -274,6 +274,23 @@ _CAMERA_LOOK = _r(r"(?P<q>what (?:do|can) you see(?: (?:now|in front of (?:me|yo
                   r"read (?:this|the) (?:paper|page|note|document|label|sign)|what am i holding)")
 _CAMERA_DEVICES = _r(r"(?:what|which|list(?: the)?) (?:cameras|webcams)(?: do (?:i|you) have| are (?:there|connected))?")
 
+_DICTATE_START = _r(r"(?:start|begin|turn on|enable|enter|go into|switch to)(?: the)? (?:dictation|dictating|dictation mode)"
+                    r"(?: mode)?(?: (?:in|into|on|for) (?:the |my )?(?P<app>.+?))?|dictation mode|take (?:a |my )?"
+                    r"dictation|(?:type|write) (?:down )?what i say(?: (?:in|into) (?:the |my )?(?P<app2>.+?))?|"
+                    r"(?:start|begin) (?:typing|writing) what i (?:say|dictate)")
+_DICTATE_STOP = _r(r"(?:stop|end|finish|exit|quit|turn off|cancel) (?:the )?(?:dictation|dictating|writing)(?: mode)?|"
+                   r"stop dictating")
+_COMPOSE = _r(r"(?:write|compose|draft|type)(?: me| out)? (?P<what>(?:a|an|the|some|two|three|four|five|one|short|long)\b.+?)"
+              r"(?: (?:in|into|on) (?:the |my |a )?(?:new )?(?P<app>notepad|word|wordpad|this document|the document|"
+              r"this file|onenote|obsidian|vs code|visual studio code))?")
+_EDIT_IN_EDITOR = _r(r"(?:go to the next line|next line|new line|new paragraph|start a new paragraph|insert a blank line|"
+                     r"delete the last sentence|delete that sentence|continue(?: writing)?|keep writing|write more|"
+                     r"select the (?:previous|last) paragraph|select (?:the |this )?paragraph|"
+                     r"(?:add|write|insert|start) a (?:new )?(?:bullet(?: point)?|heading|numbered list)(?:[,:]? .+)?|"
+                     r"make (?:this|that|it) a heading|indent (?:this|the) (?:paragraph|line)|correct the spelling|"
+                     r"fix the spelling|replace .+ with .+|move the cursor to the (?:beginning|start|end)|"
+                     r"go to the (?:beginning|start|end) of the (?:document|text|line))")
+
 _ZOOM = _r(r"zoom (?P<how>in|out)|(?:reset|normal) (?:the )?zoom|reset the zoom")
 _URL_WHAT = _r(r"what(?:'s| is) (?:the |this )?(?:url|link|address|web ?site|page)(?: of this page| i'm on)?|"
                r"what (?:page|site|website) (?:is this|am i on)")
@@ -387,7 +404,7 @@ def match_clause(text: str, raw: str, view: DesktopView, resolve_app: Callable[[
     """Computer-control rules for one normalised clause (``raw`` keeps the original casing)."""
     t = text
     # ---------------------------------------------------------------- scrolling, pointing, seeing
-    found = match_perception(t, view)
+    found = match_writing(t, raw, view) or match_perception(t, view)
     if found is not None:
         return found
     # ---------------------------------------------------------------- browser tabs
@@ -573,6 +590,33 @@ _AMOUNT = {" a little": "little", " a bit": "little", " a tiny bit": "little", "
            " slightly": "little", " a touch": "little", " a lot": "more", " lots": "more", " more": "more",
            " further": "more", " a page": "more", " one page": "more", " a screen": "more", " bit more": "normal",
            " a bit more": "normal", " way down": "more", " a lot more": "more", " some": "normal"}
+
+
+_EDITORS = {"notepad", "wordpad", "winword", "word", "code", "notepad++", "obsidian", "onenote", "soffice"}
+
+
+def match_writing(t: str, raw: str, view: DesktopView) -> Intent | None:
+    """Dictation mode, composing into an editor, and editing commands while an editor is in front."""
+    match = _DICTATE_STOP.fullmatch(t)
+    if match:
+        return _call("dictation.stop", "dictation.stop", {}, t)
+    match = _DICTATE_START.fullmatch(t)
+    if match:
+        app = match.group("app") or match.group("app2")
+        return _call("dictation.start", "dictation.start", {"target": app} if app else {}, t)
+    editor_in_front = (view.active_app or "").lower() in _EDITORS
+    match = _COMPOSE.fullmatch(t)
+    code = re.search(r"\b(?:function|code|script|program|class|method|regex|query|sql|algorithm|snippet)\b", t)
+    if match and (match.group("app") or (editor_in_front and not code)):
+        app = match.group("app")
+        target = None if not app or app.startswith(("this", "the ")) else app
+        prompt = re.sub(r"\s+(?:in|into|on) (?:the |my |a )?(?:new )?(?:notepad|word|wordpad|this document|the document|"
+                        r"this file|onenote|obsidian|vs code|visual studio code)[.!]?$", "", raw.strip(), flags=re.I)
+        return _call("dictation.write", "dictation.write", {"prompt": prompt, **({"target": target} if target else {})},
+                     t)
+    if editor_in_front and _EDIT_IN_EDITOR.fullmatch(t):
+        return _call("dictation.edit", "dictation.edit", {"command": raw.strip()}, t)
+    return None
 
 
 def match_perception(t: str, view: DesktopView) -> Intent | None:

@@ -70,7 +70,55 @@ ALIASES = {
     "word": "word", "excel": "excel", "powerpoint": "powerpoint", "outlook": "outlook", "teams": "teams",
     "claude": "claude", "claude desktop": "claude", "spotify": "spotify", "discord": "discord",
     "brave": "brave", "notepad": "notepad", "postman": "postman", "docker": "docker desktop",
+    "paint": "paint", "ms paint": "paint", "microsoft paint": "paint", "mspaint": "paint", "windows paint": "paint",
+    "windows settings": "settings", "system settings": "settings", "pc settings": "settings",
+    "the control panel": "control panel", "taskmgr": "task manager",
+    "windows explorer": "file explorer", "camera app": "camera", "the camera app": "camera",
+    "snipping tool": "snipping tool", "screenshot tool": "snipping tool", "clock": "clock", "alarms": "clock",
+    "photos": "photos", "media player": "media player", "store": "microsoft store",
+    "microsoft store": "microsoft store", "visual studio": "visual studio",
 }
+
+# Windows Settings pages: "open Bluetooth settings", "open the display settings", "settings for sound".
+SETTINGS_PAGES = {
+    "bluetooth": "bluetooth", "devices": "bluetooth", "display": "display", "screen": "display",
+    "brightness": "display", "night light": "nightlight", "sound": "sound", "audio": "sound", "volume": "sound",
+    "wifi": "network-wifi", "wi fi": "network-wifi", "network": "network", "internet": "network",
+    "vpn": "network-vpn", "airplane mode": "network-airplanemode", "windows update": "windowsupdate",
+    "update": "windowsupdate", "updates": "windowsupdate", "apps": "appsfeatures", "installed apps": "appsfeatures",
+    "default apps": "defaultapps", "startup apps": "startupapps", "startup": "startupapps",
+    "battery": "batterysaver", "power": "powersleep", "power and battery": "powersleep",
+    "personalization": "personalization", "personalisation": "personalization", "background": "personalization-background",
+    "wallpaper": "personalization-background", "themes": "themes", "colors": "colors", "colours": "colors",
+    "lock screen": "lockscreen", "taskbar": "taskbar", "notifications": "notifications", "focus": "focus",
+    "privacy": "privacy", "camera": "privacy-webcam", "camera privacy": "privacy-webcam",
+    "microphone": "privacy-microphone", "microphone privacy": "privacy-microphone", "location": "privacy-location",
+    "accounts": "accounts", "your info": "yourinfo", "sign in": "signinoptions", "sign in options": "signinoptions",
+    "date and time": "dateandtime", "time": "dateandtime", "language": "regionlanguage", "region": "regionlanguage",
+    "keyboard": "typing", "typing": "typing", "mouse": "mousetouchpad", "touchpad": "devices-touchpad",
+    "printers": "printers", "storage": "storagesense", "about": "about", "system": "system",
+    "multitasking": "multitasking", "clipboard": "clipboard", "remote desktop": "remotedesktop",
+    "gaming": "gaming-gamebar", "game mode": "gaming-gamemode", "accessibility": "easeofaccess",
+    "narrator": "easeofaccess-narrator", "magnifier": "easeofaccess-magnifier", "mobile hotspot": "network-mobilehotspot",
+    "proxy": "network-proxy", "ethernet": "network-ethernet", "recovery": "recovery", "activation": "activation",
+    "windows security": "windowsdefender", "security": "windowsdefender", "backup": "backup",
+    "graphics": "display-advancedgraphics", "notifications and actions": "notifications",
+}
+_SETTINGS_RE = re.compile(r"^(?:the )?(?:windows )?(?P<page>[a-z ]+?) settings(?: page)?$|"
+                          r"^settings (?:for|of|on) (?:the )?(?P<page2>[a-z ]+)$")
+
+
+def settings_page(spoken: str) -> AppEntry | None:
+    """An ms-settings: page for "bluetooth settings", "the display settings", "settings for sound"."""
+    match = _SETTINGS_RE.match(spoken)
+    if not match:
+        return None
+    page = (match.group("page") or match.group("page2") or "").strip()
+    uri = SETTINGS_PAGES.get(page)
+    if uri is None:
+        return None
+    title = page[:1].upper() + page[1:]
+    return AppEntry(f"{title} settings", f"ms-settings:{uri}", "uri", ["SystemSettings.exe"])
 
 # canonical name fragment -> process image names (for matching windows and force-closing)
 PROCESSES = {
@@ -79,6 +127,7 @@ PROCESSES = {
     "terminal": ["WindowsTerminal.exe"], "calculator": ["CalculatorApp.exe"], "postman": ["Postman.exe"],
     "claude": ["claude.exe"], "word": ["WINWORD.EXE"], "excel": ["EXCEL.EXE"], "powerpoint": ["POWERPNT.EXE"],
     "outlook": ["OUTLOOK.EXE", "olk.exe"], "teams": ["ms-teams.exe"], "docker desktop": ["Docker Desktop.exe"],
+    "paint": ["mspaint.exe"],
 }
 NEVER_CLOSE = {p.lower() for p in PROTECTED_PROCESSES}
 BROWSER_WORDS = {"browser", "web browser", "the browser", "my browser", "internet", "the internet", "web"}
@@ -139,6 +188,10 @@ class AppCatalog:
             seen.add(_norm(name))
             canonical = next((c for c in PROCESSES if c in _norm(name)), None)
             entries.append(AppEntry(name, app_id, "aumid", PROCESSES.get(canonical, [])))
+        for name, exe in self._registered_executables():
+            if _norm(name) not in seen:
+                seen.add(_norm(name))
+                entries.append(AppEntry(name, exe, "exe", [Path(exe).name]))
         with self._lock:
             self._entries = entries
         self.loaded_at = time.time()
@@ -149,6 +202,37 @@ class AppCatalog:
         except OSError:
             pass
         return len(entries)
+
+    @staticmethod
+    def _registered_executables() -> list[tuple[str, str]]:
+        """Apps registered outside the Start menu: "App Paths" in the registry and execution aliases
+        (%LOCALAPPDATA%\\Microsoft\\WindowsApps). Lower priority than Start-menu names."""
+        found: list[tuple[str, str]] = []
+        try:
+            import winreg
+
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    root = winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\App Paths")
+                except OSError:
+                    continue
+                with root:
+                    for i in range(winreg.QueryInfoKey(root)[0]):
+                        key_name = winreg.EnumKey(root, i)
+                        try:
+                            with winreg.OpenKey(root, key_name) as key:
+                                target = str(winreg.QueryValueEx(key, "")[0]).strip('"')
+                        except OSError:
+                            continue
+                        if target.lower().endswith(".exe") and Path(target).exists():
+                            found.append((Path(key_name).stem, target))
+        except ImportError:
+            pass
+        aliases = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps"
+        if aliases.is_dir():
+            for exe in aliases.glob("*.exe"):
+                found.append((exe.stem, str(exe)))
+        return found
 
     def names(self) -> list[str]:
         with self._lock:
@@ -166,6 +250,9 @@ class AppCatalog:
         query = re.sub(r"\s+(?:app|application|program|window)$", "", query)
         if not query or len(query) > 40:
             return None
+        page = settings_page(query)
+        if page is not None:
+            return page
         found = self._resolve(query)
         if found is None and query.endswith(" browser") and query != "web browser":
             found = self._resolve(query[: -len(" browser")])  # "brave browser" → Brave

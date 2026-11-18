@@ -493,7 +493,8 @@ class ConversationManager:
             return
         conv = self._settings.conversation
         wake, remainder = split_wake_word(text, conv.wake_words, conv.wake_words_after_hey)
-        addressed_already = self.is_engaged() or state.engaged
+        dictating = self.dictation is not None and self.dictation.dictating
+        addressed_already = self.is_engaged() or state.engaged or dictating
         if wake and not addressed_already:
             kind = wake_match_kind(text, conv.wake_words)
             verified = None
@@ -517,7 +518,7 @@ class ConversationManager:
         if not remainder.strip():
             await self.quick_reply("Yes?")
             return
-        await self.submit(remainder, source="voice", trace=state.trace)
+        await self.submit(remainder, source="voice", trace=state.trace, escape=bool(wake) and dictating)
 
     def _looks_like_echo(self, text: str) -> bool:
         heard = " ".join(self._recent_speech).lower()
@@ -578,7 +579,9 @@ class ConversationManager:
         trace.mark("received")
         await self.submit(text, source="text", trace=trace)
 
-    async def submit(self, text: str, *, source: str, trace: TurnTrace) -> None:
+    dictation = None  # DictationManager, set by the app: utterances for the document being written
+
+    async def submit(self, text: str, *, source: str, trace: TurnTrace, escape: bool = False) -> None:
         trace.mark("received")
         self._bus.publish("user.message", text=text, source=source)
         decision = parse_yes_no(text)
@@ -599,6 +602,9 @@ class ConversationManager:
         if intent is not None and intent.domain == "control":
             await self._control(intent, trace)
             return
+        # Dictation/writing: the utterance is content or an edit for the document ("Hey SID, …" escapes).
+        if self.dictation is not None and not escape and self.dictation.active and await self.dictation.handle(text):
+            return
         await self._start_turn(text, source, trace)
 
     # ------------------------------------------------------------------ control intents
@@ -608,6 +614,8 @@ class ConversationManager:
         turn = self._turn
         was_busy = turn is not None and (turn.used_tools or time.perf_counter() - turn.started > 1.5)
         idle = turn is None and not self._speech.speaking and self._permissions.pending is None
+        if name == "control.stop" and self.dictation is not None and self.dictation.typing:
+            self.dictation.interrupt()
         if name in ("control.stop", "control.wait"):
             self._speech.cancel()
             if turn is not None:

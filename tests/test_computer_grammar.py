@@ -135,8 +135,7 @@ def test_compound_commands():
 @pytest.mark.parametrize("text", [
     "write directly into the notebook.",  # an instruction, not dictation (from the V2 log)
     "Open a new notepad and start writing a Fibonacci code using recursive function.",  # needs a model to write code
-    "Write me a function that reverses a list.",
-    "type a poem about the sea",
+    "Write me a function that reverses a list.",  # code goes to the coding answer path, even with Notepad in front
     "close the deal with John",
     "play rock and roll",  # not split into "play rock" + "roll"… and a valid song query
 ])
@@ -146,6 +145,11 @@ def test_left_to_the_model_or_kept_whole(text):
         assert result == ("media.play", {"query": "play rock and roll", "platform": "auto"})
     else:
         assert result is None
+
+
+def test_composing_with_an_editor_in_front_writes_into_it():
+    assert call("type a poem about the sea") == ("dictation.write", {"prompt": "type a poem about the sea"})
+    assert call("write a poem about the sea", BROWSER_VIEW) is None  # no editor in front: a normal answer
 
 
 def test_dialog_answers_only_when_a_dialog_is_open():

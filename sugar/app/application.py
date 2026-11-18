@@ -121,6 +121,10 @@ class SIDApp:
         self.player.volume = settings.tts.volume
         self.speech = SpeechOutput(self.synth, self.player, self.bus)
         register_self_tools(self)
+        from sugar.app.dictation import DictationManager, register_dictation_tools
+
+        self.dictation = DictationManager(self)
+        register_dictation_tools(self)
         self.stt = None
         self.pipeline = None
         if voice:
@@ -141,6 +145,7 @@ class SIDApp:
             stt=self.stt, pipeline=self.pipeline,
         )
         self.conversation.on_idle_stop = self._stop_media
+        self.conversation.dictation = self.dictation
         self.components: dict[str, dict[str, Any]] = {}
         self.ui = None
         self.ui_ready = threading.Event()  # set once the UI server is listening (window can open)
@@ -176,6 +181,7 @@ class SIDApp:
             choosing=bool(self.computer.interact.pending and self.computer.interact.pending.fresh),
             scrolling=self.computer.scroller.scrolling,
             camera_on=self.computer.camera.active,
+            dictating=self.dictation.active,
         )
 
     def _extra_context(self) -> str:
