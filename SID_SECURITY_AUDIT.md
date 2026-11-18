@@ -136,3 +136,32 @@ policy layer's blocking is proven by the scripted-model tests above, where the m
    treated as the user's own words — which it then is.
 6. The live desktop suite (`tests/test_desktop_live.py`) was not re-run in this pass because the
    machine was in use.
+
+
+## Desktop intelligence additions (sid/desktop-intelligence)
+
+- **New untrusted origins**: `screen_content` (UI Automation text, OCR, vision-model descriptions) and
+  `camera_image`. Whatever is read off the screen or seen by the camera can inform an answer but cannot authorise
+  an action. Tested: injected "run Remove-Item -Recurse…" via `screen.read`, `screen.ask` and `camera.look` was
+  denied outright, without even a confirmation prompt.
+- **Camera privacy**:
+  - The camera turns on only through the user's own words (camera tools are never offered to a model).
+  - A red badge shows while it's on.
+  - Frames stay in memory and go to the local vision model only.
+  - Only "take a picture" writes a file.
+  - It is released after 2 idle minutes and at shutdown.
+- **Screens stay local**: Windows OCR and the vision model on 127.0.0.1. No online vision provider is
+  configured; one would need the user's consent before any image left the PC.
+- **Ordinary vs. protected actions**:
+  - Direct requests to open, close, switch, scroll, click, select, type, navigate, draw or save a new file run
+    without confirmation.
+  - Overwriting a file (Paint save) is DESTRUCTIVE and always asks.
+  - Clicking controls named delete, remove, buy, pay, send, publish, submit and similar asks.
+- **Drawing references**:
+  - Wikimedia Commons only, free licences only, PNG/JPEG only, at most 3 MB.
+  - Page text never reaches a model.
+  - Requests carry a generic User-Agent with no user details.
+- **Automation never fights the user**:
+  - Drawing stops when the pointer moves somewhere SID didn't put it, or when Paint leaves the foreground.
+  - Typing stops when the target window loses focus.
+  - The live acceptance runner waits for an idle PC with no full-screen app.

@@ -39,7 +39,8 @@ class DictationManager:
         self.target: DictationTarget | None = None
         self.last_activity = 0.0
         self.typing = False
-        self._typer = DictationTyper(app.computer.backend, app.computer.keyboard)
+        self._typer = DictationTyper(app.computer.backend, app.computer.keyboard,
+                                     interval_s=app.computer.keyboard.settings.char_interval_s)
 
     def interrupt(self) -> None:
         """"Stop" while SID is typing: stop at the next character (the mode itself stays on)."""

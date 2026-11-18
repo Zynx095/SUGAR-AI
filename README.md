@@ -6,7 +6,8 @@ engineering through **Claude Code** in the project you choose. Its presence is a
 particle entity whose motion follows SID's real state and whose colours follow its voice, and it speaks
 in a voice cloned from `data/voice_samples/ULTRON_SID.mp3`.
 
-Detailed documents: [architecture](SID_UNIVERSAL_AI_ARCHITECTURE.md) ·
+Detailed documents: [desktop intelligence, voices and personalities](SID_DESKTOP_INTELLIGENCE.md) ·
+[architecture](SID_UNIVERSAL_AI_ARCHITECTURE.md) ·
 [security](SID_SECURITY_AUDIT.md) · [voice](SID_VOICE_SYSTEM.md) ·
 [provider routing](SID_PROVIDER_ROUTING.md) · [storage and offline](SID_STORAGE_AND_OFFLINE_REPORT.md) ·
 [acceptance results](SID_FINAL_ACCEPTANCE_REPORT.md).
@@ -36,9 +37,15 @@ and automated tests; **NOT IMPLEMENTED**; **PENDING** = needs a run only you can
 | Health information (emergencies, local-only personal data, no diagnosis) | VERIFIED |
 | Claude Code builds and analysis in an explicit project | VERIFIED |
 | Desktop, browser, YouTube/Spotify, files, PowerShell | IMPLEMENTED (live suite not re-run this pass) |
+| Describe-and-click, smart scrolling, Settings pages | IMPLEMENTED (live desktop run PENDING) |
+| Reading the screen: Windows OCR + local vision model (qwen3-vl on D:) | VERIFIED on synthetic windows |
+| Dictation and writing modes ("go to the next line" = Enter) | IMPLEMENTED (live run PENDING) |
+| Drawing in Paint (vector plans, traced freely licensed references) | references VERIFIED; drawing IMPLEMENTED (live PENDING) |
+| Camera on request (badge, local description, release) | IMPLEMENTED (live run PENDING) |
 | Prompt-injection protection, command risk policy | VERIFIED |
 | Online → local fallback, offline mode with Ollama on D: | VERIFIED |
-| Voices (SID, female, neutral), palettes, personalities | VERIFIED |
+| Voices (SID, female, blue), palettes | VERIFIED (blue: 0.39 similarity to female, was 0.86) |
+| Personality engine (style, length, temperature, delivery; per-voice, temporary, traits) | VERIFIED (live model) |
 | Wake-phrase look-alike verification | VERIFIED on synthetic speech, real-mic test PENDING |
 | Telemetry history and export | IMPLEMENTED (UI VERIFIED) |
 | CI workflow | IMPLEMENTED, first GitHub run PENDING (needs a push) |
@@ -59,6 +66,15 @@ and automated tests; **NOT IMPLEMENTED**; **PENDING** = needs a run only you can
   Ordinary conversation never reaches Claude Code.
 - **Operates the PC** — apps and windows, typing and shortcuts, the browser, YouTube and Spotify search,
   playback, files, clipboard, screenshots, PowerShell — within `permissions.allowed_roots`.
+- **Sees and points** — "what's on my screen", "read this window", "where is the Save button", "click the
+  checkbox", "select the second option", "scroll down a little", "keep scrolling" / "stop scrolling". Accessibility
+  data first, then on-device OCR, then the local vision model; screens never leave the PC.
+- **Writes where you are** — "start dictation" (speech becomes text, "next line" presses Enter, "delete the last
+  sentence" edits); "write a paragraph about…" streams into Notepad as it's written.
+- **Draws in Paint** — "open Paint and draw a cat", "draw a tree beside it", "add colour", "save this as
+  cat.png"; real strokes with Paint's own tools, references from Wikimedia Commons (free licences only).
+- **Uses the camera when asked** — "turn on the camera", "what do you see?", "turn off the camera"; a red badge
+  while it's on, nothing recorded.
 - **Stops sensibly** — "stop" stops speech, then the running answer or action; if only Claude Code is
   working it asks before stopping it; with nothing running it pauses your media.
 
@@ -78,9 +94,9 @@ destructive request. Details: [security audit](SID_SECURITY_AUDIT.md).
 
 | Say | Effect |
 |---|---|
-| "switch to your female voice" / "use the neutral voice" / "switch back to your original voice" | voice + entity colours (amber → crimson → cyan), 0.8 s transition |
+| "switch to your female voice" / "switch to your blue voice" / "switch back to your original voice" | voice + entity colours (amber → crimson → electric blue), 0.8 s transition; each voice brings its own personality |
 | "speak faster", "make your voice deeper", "speak quieter" | adjusts and remembers |
-| "be more professional", "be friendly", "be cinematic", "go back to your normal personality" | how SID writes, independent of the voice |
+| "switch to your blue personality", "be serious for a moment", "speak more professionally", "be friendly from now on", "be more sarcastic", "go back to your normal personality" | how SID writes and paces its speech; temporary unless "from now on"; serious topics are never joked about |
 
 Wake phrase **"Hey SID"** (or "SID, …" at the start). Transcripts that only look like it ("He said…")
 are re-checked before SID wakes.
@@ -135,6 +151,8 @@ node --test tests\ui\*.test.mjs                                               # 
 $env:SUGAR_MODEL_TESTS=1; .\venv\Scripts\python.exe -m pytest tests\test_stt.py tests\test_tts.py
 $env:SUGAR_DESKTOP_TESTS=1; .\venv\Scripts\python.exe -m pytest tests\test_desktop_live.py   # takes focus
 .\venv\Scripts\python.exe tools\wake_test.py                                  # your microphone
+.\venv\Scripts\python.exe tools\desktop_acceptance.py                         # live desktop run (waits until idle)
+.\venv\Scripts\python.exe tools\evaluate_voices.py                            # measure the voices
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, config validation, UI and Python tests on Windows with no
@@ -164,4 +182,6 @@ tools/           voice fitting, wake test
   answering or asking, never toward executing.
 - The local model (`qwen2.5:3b`) is small; offline answers are fast but simpler.
 - No acoustic echo cancellation on Windows/PortAudio; a headset gives the best barge-in.
-- No image generation model.
+- No image generation model (Paint drawing traces line art; it does not generate pictures).
+- Drawing quality is line-art level: outlines and main inner lines, not shading.
+- Paint's tool names in UI Automation are assumed until the live desktop run confirms them.

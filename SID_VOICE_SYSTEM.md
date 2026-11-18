@@ -21,7 +21,7 @@ pYIN on the same sentence:
 |---|---|---|---|---|
 | `sid` (default) | SID | MeloTTS, re-voiced by OpenVoice V2 as the speaker in `data/voice_samples/ULTRON_SID.mp3`; only pace and treble above 9.5 kHz fitted | 81 Hz (reference 83 Hz) | amber / gold / molten orange: `#ffab3d #f6cf7a #ff6a12 #ff4524` |
 | `female` | SID (female) | MeloTTS EN-Newest speaker, light presence/air lift and compression; no pitch shifting, so it is a genuinely female voice, not a shifted male one | 205 Hz | crimson / rose / magenta: `#e8114f #ff6fa3 #9e0c5c #ffb03a` |
-| `neutral` | SID (neutral) | MeloTTS, formant-preserving PSOLA −3 semitones, low shelf, gentle compression | 167 Hz | cyan / ice / silver: `#3fd0ff #d6f6ff #3a6f8f #ff7a3c` |
+| `blue` | SID (blue) | MeloTTS English v1 **EN-AU** speaker; formants −8 %; time-varying PSOLA: intonation ×1.12, pitches pulled 60 % toward semitones; 1.6 ms comb; 80 Hz ring modulation at 25 %; 1.6× pauses | 138 Hz (range 17 st) | electric blue / ice / cobalt / cyan: `#1e90ff #c8f4ff #0b2a8f #00e5ff` |
 | `sid_v2` | SID (mechanical) | the earlier processed DSP voice | — | Aether red |
 
 Clone quality of `sid` (from `tools/fit_clone.py`): speaker similarity 0.89 to the reference (raw
@@ -48,11 +48,17 @@ voice; "switch back to your original voice" → `sid`, `#ffab3d…`. Sample save
 smoothstep curve (spec: 500–1000 ms). The browser test checks a mid-transition frame (progress < 1)
 and the final colours, and the UI accent colour follows.
 
-## Personalities — VERIFIED
+The earlier third voice, `neutral` (the female EN-Newest speaker shifted down 3 semitones), measured 0.86
+speaker-embedding similarity to the female voice. It was replaced by `blue` (0.39), and old settings that say
+`neutral` map to `blue`. Details: [SID_DESKTOP_INTELLIGENCE.md](SID_DESKTOP_INTELLIGENCE.md#1-voices).
 
-`sid` (default), `cinematic`, `friendly`, `professional`, `creative`; "be more professional", "be
-friendly", "go back to your normal personality". Independent of the voice: a professional personality
-with the female voice is a tested combination.
+## Personalities — VERIFIED (superseded by the personality engine)
+
+`sid`, `female`, `blue`, `professional`, `friendly`, `creative`, `cinematic`. Each sets the style prompt, tone
+samples, reply length, temperature, speech pace and pauses. Each voice brings its own personality by default,
+spoken changes are temporary ("be serious for a moment" lasts three answers) unless "from now on", and trait
+dials adjust sarcasm, humour and brevity. See
+[SID_DESKTOP_INTELLIGENCE.md](SID_DESKTOP_INTELLIGENCE.md#2-personality-engine).
 
 ## Speech flow — VERIFIED
 

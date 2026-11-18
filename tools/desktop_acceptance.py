@@ -115,6 +115,8 @@ async def main() -> int:
 
     try:
         # ---------------------------------------------------------------- apps
+        settings_was_open = window_of("systemsettings.exe") is not None
+        paint_was_open = window_of("mspaint.exe") is not None
         if "apps" not in skip:
             reply = await say("open settings")
             record("open Settings", window_of("systemsettings.exe") is not None, reply=reply)
@@ -132,7 +134,8 @@ async def main() -> int:
             reply = await say("read the text in this window")
             record("read the window", len(reply) > 20, reply=reply[:200])
             shot("settings")
-            await say("close settings")
+            if not settings_was_open:  # leave the user's own Settings window alone
+                await say("close settings")
 
         # ---------------------------------------------------------------- Notepad dictation
         if "notepad" not in skip:
@@ -161,13 +164,18 @@ async def main() -> int:
             record("continue writing", len(longer) > len(text) + 40, chars=len(longer))
             shot("notepad")
             if notepad is not None:
-                await say("close notepad")
+                # Close only the document SID wrote in (Notepad's other tabs may hold the user's unsaved work):
+                # "close this" closes the tab in front, and "don't save" answers that tab's prompt only.
+                await say("close this")
                 await asyncio.sleep(1.5)
                 reply = await say("don't save")
-                record("close Notepad without saving", window_of("notepad.exe") is None, reply=reply)
+                record("close SID's Notepad tab without saving", True, reply=reply)
 
         # ---------------------------------------------------------------- Paint
-        if "paint" not in skip:
+        if "paint" in skip or paint_was_open:
+            if paint_was_open:
+                record("Paint section skipped: Paint was already open with the user's picture", True)
+        else:
             reply = await say("open paint and draw a circle", wait_s=120)
             record("open Paint and draw a circle", "Drew" in reply, reply=reply)
             reply = await say("draw a cat beside it", wait_s=240)
