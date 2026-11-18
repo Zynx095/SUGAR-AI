@@ -223,4 +223,5 @@ C: free space went from 2.86 GB to 3.01 GB during this work (nothing written the
 | Headless browser | `tests/test_ui_browser.py` | camera and dictation badges |
 
 Live desktop: `tools/desktop_acceptance.py` waits for an idle PC with no full-screen app, then drives the real
-pipeline. Results go to `data/acceptance/`.
+pipeline. Results go to `data/acceptance/`. The one partial live run and its findings are in
+[SID_DESKTOP_ACCEPTANCE_REPORT.md](SID_DESKTOP_ACCEPTANCE_REPORT.md).

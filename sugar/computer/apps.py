@@ -373,6 +373,8 @@ class ApplicationController:
     def windows_for(self, entry: AppEntry) -> list[WindowInfo]:
         images = {p.lower() for p in entry.processes}
         stems = set(WindowManager.stems_for(entry.name))
+        if entry.target.startswith("ms-settings:"):  # a Settings page lives in the one Settings window
+            stems |= set(WindowManager.stems_for("Settings"))
         matches = []
         for window in self._windows.list():
             if window.process == "explorer.exe" and window.class_name not in ("CabinetWClass", "ExploreWClass"):

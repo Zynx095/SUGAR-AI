@@ -45,7 +45,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 
-TABBED_EDITORS = {"notepad"}  # "close this" closes the document in front, like a browser tab
+TABBED_EDITORS = {"notepad"}
+TERMINALS = {"windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "openconsole.exe",
+             "wezterm-gui.exe", "alacritty.exe", "mintty.exe"}  # "close this" closes the document in front, like a browser tab
 REFERENCES = {"this", "that", "it", "current", "active", "this window", "that window", "this app", "that app",
               "that application", "this application", "this one", "that one", "the current window", "here",
               "last_opened", "the app i just opened", "what i just opened", "the one i just opened"}
@@ -157,10 +159,19 @@ class ComputerControl:
         if self._bus is not None:
             self._bus.publish("camera.state", active=active, device=device)
 
-    def start(self, bus: EventBus | None = None) -> None:
+    def start(self, bus: EventBus | None = None, *, protect_foreground: bool = False) -> None:
         self._bus = bus
         if not self.available:
             return
+        if protect_foreground:
+            # Headless/text runs: the window in front at start is the terminal SID was launched from. Never
+            # treat it as "this window" (a live test once closed the terminal it was running in).
+            try:
+                info = self.backend.get_window(self.backend.foreground())
+                if info is not None and info.process.lower() in TERMINALS:
+                    self.context.protect(info.hwnd)
+            except Exception:
+                pass
         try:
             self.context.start()
         except Exception:

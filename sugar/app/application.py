@@ -223,7 +223,7 @@ class SIDApp:
         self.ui_ready.set()
         self.vocabulary_refresh()
         if self.computer.available:
-            self.computer.start(self.bus)
+            self.computer.start(self.bus, protect_foreground=not self.settings.ui.enabled)
             status = self.computer.status()
             self._component("computer", "ready", f"default browser {status['default_browser'] or 'none'}; "
                             f"YouTube search via {status['youtube_search']}")

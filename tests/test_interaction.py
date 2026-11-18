@@ -297,3 +297,41 @@ def test_text_seen_on_screen_or_camera_cannot_authorise_commands(bus, tool):
     run(loop.run([{"role": "user", "content": "what does my screen say?"}], chain=["scripted"],
                  tool_groups={"agent"}, purpose="agent", on_text=lambda t: None))
     assert ran == [] and asked == []
+
+
+# ---------------------------------------------------------------------------------------------- app resolution
+
+
+def test_settings_pages_and_paint_aliases_resolve(tmp_path):
+    from sugar.computer.apps import AppCatalog, AppEntry
+
+    catalog = AppCatalog(tmp_path / "apps.json")
+    catalog.add(AppEntry("Paint", "Microsoft.Paint_8wekyb3d8bbwe!App"))
+    catalog.add(AppEntry("ibisPaint", "ibis!App"))
+    assert catalog.resolve("ms paint").name == "Paint" and catalog.resolve("paint").name == "Paint"
+    page = catalog.resolve("bluetooth settings")
+    assert page.target == "ms-settings:bluetooth" and page.kind == "uri"
+    assert catalog.resolve("the display settings").target == "ms-settings:display"
+    assert catalog.resolve("settings for sound").target == "ms-settings:sound"
+    assert catalog.resolve("settings").target == "ms-settings:"
+
+
+def test_an_app_that_is_not_installed_is_reported_not_improvised():
+    from sugar.intelligence.fastpath import FastPath
+
+    fast = FastPath(resolve_app=lambda n: None, desktop=lambda: DesktopView())
+    intent = fast.match("open spotify")
+    assert intent is not None and intent.name == "app.missing" and intent.slots["name"] == "spotify"
+    assert fast.match("open youtube") is None or fast.match("open youtube").name != "app.missing"
+    assert fast.match("open my downloads") is None or fast.match("open my downloads").name != "app.missing"
+
+
+def test_a_protected_window_is_never_the_target():
+    desktop = FakeDesktop()
+    terminal = desktop.add(FakeWindow("Windows PowerShell", "windowsterminal.exe", 77, kind="other"))
+    context = DesktopContext(desktop)
+    context.refresh()
+    context.protect(terminal.hwnd)
+    assert context.is_own(terminal.info())
+    assert WindowManager(desktop, context).resolve("this") is None or \
+        WindowManager(desktop, context).resolve("this").hwnd != terminal.hwnd
