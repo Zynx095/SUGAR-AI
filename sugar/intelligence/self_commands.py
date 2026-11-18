@@ -16,15 +16,23 @@ VOICE_ALIASES = {
     "lady": "female", "feminine": "female", "her": "female",
     "original": "sid", "default": "sid", "normal": "sid", "usual": "sid", "old": "sid", "masculine": "sid",
     "male": "sid", "man": "sid", "deep": "sid", "sid": "sid", "ultron": "sid", "own": "sid", "real": "sid",
-    "neutral": "neutral", "androgynous": "neutral", "calm": "neutral",
+    "neutral": "blue", "androgynous": "blue", "calm": "blue", "blue": "blue", "quirky": "blue",
+    "funny": "blue", "third": "blue", "cyan": "blue", "red": "female", "crimson": "female", "amber": "sid",
+    "orange": "sid",
     "mechanical": "sid_v2", "robotic": "sid_v2", "robot": "sid_v2", "machine": "sid_v2",
 }
 PERSONALITY_ALIASES = {
-    "default": "sid", "normal": "sid", "usual": "sid", "sid": "sid", "original": "sid", "regular": "sid",
-    "cinematic": "cinematic", "movie": "cinematic", "dramatic": "cinematic", "villain": "cinematic",
+    # "normal"/"usual"/"default" mean: back to the voice's own personality (see RESET_WORDS)
+    "default": "reset", "normal": "reset", "usual": "reset", "regular": "reset", "own": "reset",
+    "sid": "sid", "original": "sid", "classic": "sid",
+    "cinematic": "cinematic", "movie": "cinematic", "villain": "cinematic", "epic": "cinematic",
     "friendly": "friendly", "casual": "friendly", "warm": "friendly", "nice": "friendly", "chill": "friendly",
+    "kind": "friendly",
     "professional": "professional", "formal": "professional", "business": "professional", "serious": "professional",
-    "creative": "creative", "imaginative": "creative", "playful": "creative", "expressive": "creative",
+    "creative": "creative", "imaginative": "creative", "expressive": "creative", "artistic": "creative",
+    "blue": "blue", "funny": "blue", "quirky": "blue", "silly": "blue", "playful": "blue", "goofy": "blue",
+    "dramatic": "blue", "robot": "blue", "robotic": "blue", "comedian": "blue", "comedy": "blue",
+    "female": "female", "feminine": "female", "red": "female",
 }
 
 _VOICE_WORDS = "|".join(sorted((re.escape(k) for k in VOICE_ALIASES), key=len, reverse=True))
@@ -54,10 +62,35 @@ _ADJUST = [
     ("volume", +0.2, re.compile(r"^(?:speak|talk) (?:more )?(?:loudly|louder|up)$|^use a louder voice$")),
 ]
 _PERSONALITY = re.compile(
-    rf"^(?:(?:switch|change|go|set)(?: back)? to |use |be |become |turn on |activate |enable )"
-    rf"(?:your |the |a |an |more )?(?P<p>{_PERSONALITY_WORDS})(?: personality| mode| persona| style)?(?: please| now)?$|"
-    rf"^(?P<p2>{_PERSONALITY_WORDS}) (?:personality|mode|persona)(?: please| now)?$"
+    rf"^(?:(?:switch|change|go|set|get)(?: back)?(?: over)? (?:to|into) |use |be |become |turn on |activate |enable |"
+    rf"(?:speak|talk|act|answer|respond) (?:more )?(?:like |in |with )?(?:a |an |your )?)"
+    rf"(?:your |the |a |an |more |a bit more |a little more |a little |a bit |slightly )?(?P<p>{_PERSONALITY_WORDS})"
+    rf"(?:ly)?(?: personality| mode| persona| style| self| side| version| sid| tone| voice personality)?$|"
+    rf"^(?P<p2>{_PERSONALITY_WORDS}) (?:personality|mode|persona)$"
 )
+# "for a moment" → a short override; "from now on" → saved as this voice's default
+_FOR_A_MOMENT = re.compile(r"\s*,?\s*(?:for (?:a |one )?(?:moment|minute|second|bit|while|sec)|for now|"
+                           r"for the next (?:few|couple of) (?:minutes|answers|replies|questions)|just this once|"
+                           r"temporarily)$")
+_FROM_NOW_ON = re.compile(r"\s*,?\s*(?:from now on|permanently|by default|for good|always|forever|"
+                          r"and (?:keep|make) (?:it|that) (?:that way|your default|the default)|"
+                          r"and save (?:it|that)|as (?:your|the) default)$")
+_TRAIT = [
+    ("sarcasm", +1, re.compile(r"^(?:be|get|act|sound) (?:a (?:bit|little) |even |much )?more sarcastic$|"
+                               r"^(?:more|extra) sarcasm(?: please)?$|^(?:turn|crank|dial) up the sarcasm$|"
+                               r"^be sarcastic$")),
+    ("sarcasm", -1, re.compile(r"^(?:be )?less sarcastic$|^(?:less|no more|stop the|enough) sarcasm$|"
+                               r"^(?:turn|tone|dial) down the sarcasm$|^stop being sarcastic$|^be sincere$")),
+    ("humour", +1, re.compile(r"^(?:be|get) (?:a (?:bit|little) |even |much )?(?:more funny|funnier)$|"
+                              r"^(?:more|tell more) jokes(?: please)?$|^(?:turn|crank|dial) up the (?:humou?r|jokes)$|"
+                              r"^lighten up$")),
+    ("humour", -1, re.compile(r"^(?:fewer|less|no more) jokes(?: please)?$|^stop (?:joking|making jokes)(?: around)?$|"
+                              r"^(?:turn|tone|dial) down the (?:humou?r|jokes)$|^be less funny$|^less humou?r$")),
+    ("brevity", +1, re.compile(r"^(?:be (?:more )?(?:concise|brief)|(?:give me |use )?shorter (?:answers|replies)|"
+                               r"keep (?:it|your answers) (?:short|brief)|talk less|less detail)(?: please)?$")),
+    ("brevity", -1, re.compile(r"^(?:give me |use )?(?:longer|more detailed|fuller) (?:answers|replies)(?: please)?$|"
+                               r"^(?:more detail|explain more|go into more detail)(?: please)?$|^be more detailed$")),
+]
 _END_ROLEPLAY = re.compile(r"^(?:end|stop|exit|quit|leave|finish|break) (?:the |this |our )?(?:roleplay|role play|"
                            r"role-play|scene|story|character)$|^(?:back to normal|out of character|ooc|drop the act|"
                            r"you can stop pretending|stop pretending)$")
@@ -83,11 +116,26 @@ def parse(text: str) -> Intent | None:
         if pattern.match(plain):
             return Intent("voice.adjust", {setting: delta}, plain,
                           call=("voice.adjust", {"setting": setting, "delta": delta}))
-    match = _PERSONALITY.match(plain)
+    for trait, delta, pattern in _TRAIT:
+        if pattern.match(plain):
+            return Intent("personality.trait", {trait: delta}, plain,
+                          call=("personality.trait", {"trait": trait, "delta": delta}))
+    core, turns, persist = plain, None, False
+    moment = _FOR_A_MOMENT.search(core)
+    if moment:
+        core, turns = core[: moment.start()].strip(" ,"), 3
+    forever = _FROM_NOW_ON.search(core)
+    if forever:
+        core, persist = core[: forever.start()].strip(" ,"), True
+    match = _PERSONALITY.match(core)
     if match:
         personality = PERSONALITY_ALIASES[match.group("p") or match.group("p2")]
-        return Intent("personality.set", {"personality": personality}, plain,
-                      call=("personality.set", {"personality": personality}))
+        if personality == "reset":
+            return Intent("personality.reset", {}, plain, call=("personality.reset", {"persist": persist}))
+        args: dict = {"personality": personality, "persist": persist}
+        if turns:
+            args["turns"] = turns
+        return Intent("personality.set", {"personality": personality}, plain, call=("personality.set", args))
     if _END_ROLEPLAY.match(plain):
         return Intent("roleplay.end", {}, plain, call=("roleplay.end", {}))
     if _HEALTH_ALLOW.match(plain):

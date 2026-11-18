@@ -150,7 +150,9 @@ def test_personality_is_independent_of_voice(settings):
     provider, app = run(scenario())
     system = provider.calls[-1]["messages"][0]["content"]
     assert "Personality (Professional)" in system
-    assert app.settings.conversation.personality == "professional" and app.settings.tts.voice_profile == "female"
+    # a spoken personality change is for this session: it stays when the voice changes, and isn't saved
+    assert app.personality.effective("female") == "professional" and app.settings.tts.voice_profile == "female"
+    assert "personalities" not in app.settings.model_dump()["conversation"] or         not app.settings.conversation.personalities
 
 
 def test_emergency_gets_an_immediate_instruction_without_a_model(settings):

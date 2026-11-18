@@ -34,17 +34,37 @@ IDENTITIES: dict[str, VoiceIdentity] = {
     "female": VoiceIdentity(
         "female", "SID (female)", "Natural, confident female voice (MeloTTS EN-Newest speaker)", "feminine",
         "female", "melotts", "EN-Newest", ("#e8114f", "#ff6fa3", "#9e0c5c", "#ffb03a"), "sid"),
-    "neutral": VoiceIdentity(
-        "neutral", "SID (neutral)", "Calm, mid-register voice", "neutral", "neutral", "melotts", "EN-Newest",
-        ("#3fd0ff", "#d6f6ff", "#3a6f8f", "#ff7a3c"), "sid"),
+    "blue": VoiceIdentity(
+        "blue", "SID (blue)", "Quirky, playfully robotic — a different speaker with tuned, lively intonation",
+        "neutral", "blue", "melotts", "EN-AU",
+        # electric blue core, ice-blue highlight, deep cobalt depth, cyan accent
+        ("#1e90ff", "#c8f4ff", "#0b2a8f", "#00e5ff"), "blue"),
     "sid_v2": VoiceIdentity(
         "sid_v2", "SID (mechanical)", "The earlier processed mechanical voice", "masculine", "sid_v2", "melotts",
         "EN-Newest", ("#d40a2a", "#ff3d55", "#6e0011", "#ff9a3c"), "cinematic"),
 }
 
 
+# Old ids that now mean another identity ("neutral" was the earlier third voice).
+ALIASES = {"neutral": "blue"}
+
+
+def canonical(identity_id: str | None) -> str:
+    key = (identity_id or "sid").lower()
+    key = ALIASES.get(key, key)
+    return key if key in IDENTITIES else "sid"
+
+
 def get_identity(identity_id: str | None) -> VoiceIdentity:
-    return IDENTITIES.get((identity_id or "sid").lower(), IDENTITIES["sid"])
+    return IDENTITIES[canonical(identity_id)]
+
+
+def profile_for(setting: str | None) -> str:
+    """The voice_profile key to synthesise with: an identity's profile, or a raw profile name (tools, tests)."""
+    key = (setting or "sid").lower()
+    if key in IDENTITIES or key in ALIASES:
+        return get_identity(key).profile
+    return key
 
 
 def palette_for(identity_id: str | None, overrides: dict[str, list[str]] | None = None) -> list[str]:

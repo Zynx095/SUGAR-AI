@@ -22,7 +22,7 @@ from sugar.agent.loop import AgentLoop
 from sugar.agent.permissions import PermissionManager
 from sugar.app.self_tools import register_self_tools, voice_state
 from sugar.audio.voice_profile import PROFILES as VOICE_PROFILES
-from sugar.audio.voices import IDENTITIES, describe
+from sugar.audio.voices import IDENTITIES, canonical, describe
 from sugar.coding.projects import ProjectRegistry
 from sugar.coding.sessions import CodingSessionManager
 from sugar.computer import ComputerControl
@@ -38,7 +38,7 @@ from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.conversation import ConversationManager
 from sugar.intelligence.fastpath import DesktopView, FastPath
 from sugar.intelligence.orchestrator import Orchestrator
-from sugar.intelligence.personality import PERSONALITIES
+from sugar.intelligence.personality import PERSONALITIES, PersonalityState, get_personality
 from sugar.intelligence.router import Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.memory.store import MemoryStore
@@ -99,11 +99,13 @@ class SIDApp:
         self.provider_router = ProviderRouter(self.pool, settings.llm.routes)
         self.router = Router(settings, self.fastpath, self.working, coding_active=lambda: bool(self.sessions.running()),
                              providers=self.provider_router)
+        self.personality = self._personality_state(settings)
         self.context = ContextBuilder(settings, self.memory, self.working, lambda: self.conversation.conversation_id,
-                                      extra_context=self._extra_context)
+                                      extra_context=self._extra_context, personality=self.current_personality)
         self.agent = AgentLoop(self.pool, self.executor, self.registry, self.bus)
         self.orchestrator = Orchestrator(settings, self.bus, self.router, self.pool, self.agent, self.executor,
                                          self.context, self.working, self.sessions, self.shared_state)
+        self.orchestrator.personality = self.personality
 
         # Audio (constructed now, models loaded in start()).
         from sugar.audio.playback import AudioPlayer
@@ -111,6 +113,10 @@ class SIDApp:
         from sugar.audio.tts import build_synthesizer
 
         self.synth = build_synthesizer(settings.tts, data / "tts_tmp", settings.paths.models_dir)
+        self.synth.delivery = self.delivery
+        for engine in self.synth._engines:
+            if hasattr(engine, "delivery"):
+                engine.delivery = self.delivery
         self.player = AudioPlayer(device=settings.audio.output_device)
         self.player.volume = settings.tts.volume
         self.speech = SpeechOutput(self.synth, self.player, self.bus)
@@ -376,10 +382,31 @@ class SIDApp:
             "voice_profiles": list(VOICE_PROFILES),
             "voice": voice_state(self),
             "voice_identities": [describe(i, self.settings.tts.palettes) for i in IDENTITIES],
-            "personalities": [{"id": p.id, "name": p.name} for p in PERSONALITIES.values()],
+            "personalities": [{"id": p.id, "name": p.name, "summary": p.summary} for p in PERSONALITIES.values()],
+            "personality": self.personality.describe(canonical(self.settings.tts.voice_profile)),
             "connectivity": self.pool.connectivity(),
             "roleplay": bool(self.working.roleplay),
         }
+
+    # ------------------------------------------------------------------ personality
+
+    @staticmethod
+    def _personality_state(settings: Settings) -> PersonalityState:
+        defaults = dict(settings.conversation.personalities)
+        legacy = (settings.conversation.personality or "auto").lower()
+        voice = canonical(settings.tts.voice_profile)
+        if legacy not in ("auto", "") and legacy in PERSONALITIES and voice not in defaults:
+            defaults[voice] = legacy  # a personality saved by an older version applied to the voice in use then
+        return PersonalityState(defaults=defaults)
+
+    def current_personality(self):
+        """(personality, trait dials) in effect right now."""
+        voice = canonical(self.settings.tts.voice_profile)
+        return get_personality(self.personality.effective(voice)), dict(self.personality.traits)
+
+    def delivery(self) -> tuple[float, float]:
+        personality, _ = self.current_personality()
+        return personality.pace, personality.pause_scale
 
     async def handle_command(self, message: dict[str, Any]) -> dict[str, Any] | None:
         cmd = message.get("cmd")
@@ -416,10 +443,10 @@ class SIDApp:
         if cmd == "voice.set":
             result = await self.executor.execute("voice.set", {"voice": str(message.get("voice", "sid"))}, origin="user")
             return {"ok": result.ok, "summary": result.summary}
-        if cmd == "personality.set":
+        if cmd == "personality.set":  # the settings panel: this voice's saved default
             result = await self.executor.execute("personality.set",
-                                                 {"personality": str(message.get("personality", "sid"))},
-                                                 origin="user")
+                                                 {"personality": str(message.get("personality", "sid")),
+                                                  "persist": True}, origin="user")
             return {"ok": result.ok, "summary": result.summary}
         if cmd == "telemetry.history":
             if self.telemetry is None:

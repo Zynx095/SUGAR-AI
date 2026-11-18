@@ -71,6 +71,7 @@ class AgentLoop:
         model_for: dict[str, str] | None = None,
         tool_names: set[str] | None = None,
         user_origin: Origin = Origin.DIRECT_USER_TEXT,
+        temperature: float | None = None,
     ) -> AgentResult:
         tools = self._registry.schemas(tool_groups, tool_names) if tool_groups else None
         transcript = list(messages)
@@ -89,8 +90,9 @@ class AgentLoop:
             if trace is not None:
                 trace.mark("llm_start")
             started = time.perf_counter()
+            options = {"temperature": temperature} if temperature is not None else {}
             async for chunk in self._pool.stream(chain, transcript, tools=tools, purpose=purpose,
-                                                 model_for=model_for):
+                                                 model_for=model_for, **options):
                 if chunk.kind == "text":
                     if first_token:
                         first_token = False

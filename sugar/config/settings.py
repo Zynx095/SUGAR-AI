@@ -75,7 +75,7 @@ class TTSSettings(BaseModel):
     engine: Literal["melo", "sapi", "none"] = "melo"
     device: Literal["auto", "cuda", "cpu"] = "auto"
     voice: str = "EN-Newest"
-    voice_profile: str = "sid"  # sid (cloned) | sid_dsp | sid_v2 | sid_clean | natural
+    voice_profile: str = "sid"  # voice identity: sid (cloned) | female | blue | sid_v2 (sugar/audio/voices.py)
     voice_reference: str = "data/voice_samples/ULTRON_SID.mp3"  # the voice "sid" is cloned from
     pitch_offset: float = 0.0  # semitones added to any voice ("make your voice deeper")
     palettes: dict[str, list[str]] = Field(default_factory=dict)  # per-voice entity colours (see audio/voices.py)
@@ -150,7 +150,11 @@ class ConversationSettings(BaseModel):
     desktop_control: bool = True
     # "universal": SID handles any legitimate request. "engineering_only": the strict v1 boundary.
     scope: Literal["universal", "engineering_only"] = "universal"
-    personality: str = "sid"  # sid | cinematic | friendly | professional | creative
+    # Legacy single personality (kept for old sid.yaml/overrides files; migrated to `personalities`).
+    personality: str = "auto"
+    # Per-voice personality defaults: {voice id: personality id}. Missing voices use their matching
+    # personality (sid → sid, female → female, blue → blue). See sugar/intelligence/personality.py.
+    personalities: dict[str, str] = Field(default_factory=dict)
     health_external: bool = False  # send personal health information to online models without asking
     engagement_timeout_s: float = 45.0
     history_turns: int = 12

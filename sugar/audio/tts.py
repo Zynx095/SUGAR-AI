@@ -28,7 +28,8 @@ from typing import Protocol
 
 import numpy as np
 
-from sugar.audio.voice_profile import apply_profile, get_profile, length_scale_factor
+from sugar.audio.voice_profile import VoiceProfile, apply_profile, get_profile, length_scale_factor
+from sugar.audio.voices import profile_for
 from sugar.config.settings import TTSSettings
 from sugar.core.processes import CREATE_NO_WINDOW
 
@@ -64,9 +65,11 @@ class MeloEngine:
         self._converter_failed = False
         self._tts = None
         self._speaker_id = 0
+        self._extra: dict[str, object] = {}  # other MeloTTS language models (the blue voice), loaded on first use
         self._lock = threading.Lock()
         self.device = "cpu"
         self.sample_rate = OUTPUT_RATE
+        self.delivery = None  # () -> (pace multiplier, pause scale) from the active personality
 
     def _resolve_device(self) -> str:
         import torch
@@ -100,29 +103,51 @@ class MeloEngine:
         self._speaker_id = speakers.get(self._settings.voice, next(iter(speakers.values())))
         self.sample_rate = int(self._tts.hps.data.sampling_rate)
         self.voices = list(speakers.keys())
-        if get_profile(self._settings.voice_profile).clone:
+        if self.profile().clone:
             self._clone_converter()
+        if self.profile().model:
+            self._model_for(self.profile())
         self.synthesize("Okay.")  # first CUDA call compiles kernels (~2 s)
         log.info("MeloTTS ready on %s in %.1fs (voice %s)", self.device, time.perf_counter() - started,
                  self._settings.voice)
 
-    def _create(self):
+    def _create(self, language: str = "EN_NEWEST"):
         from melo.api import TTS
 
-        return TTS(language="EN_NEWEST", device=self.device)
+        return TTS(language=language, device=self.device)
+
+    def profile(self) -> VoiceProfile:
+        return get_profile(profile_for(self._settings.voice_profile))
+
+    def _model_for(self, profile: VoiceProfile):
+        """(model, speaker id) for a profile: the main EN_NEWEST model, or another MeloTTS model on demand."""
+        if not profile.model or profile.model == "EN_NEWEST":
+            return self._tts, self._speaker_id
+        model = self._extra.get(profile.model)
+        if model is None:
+            started = time.perf_counter()
+            model = self._create(profile.model)
+            if int(model.hps.data.sampling_rate) != self.sample_rate:
+                raise RuntimeError(f"MeloTTS {profile.model} runs at a different sample rate")
+            self._extra[profile.model] = model
+            log.info("MeloTTS %s loaded in %.1fs for the %s voice", profile.model, time.perf_counter() - started,
+                     profile.name)
+        speakers = dict(model.hps.data.spk2id.items())
+        return model, speakers.get(profile.speaker or "", next(iter(speakers.values())))
 
     def synthesize(self, text: str) -> np.ndarray:
         import torch
 
         from melo import utils as melo_utils
 
-        tts = self._tts
-        if tts is None:
+        if self._tts is None:
             raise RuntimeError("MeloTTS is not loaded")
         text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
         s = self._settings
-        profile = get_profile(s.voice_profile)
+        profile = self.profile()
+        pace = max(0.5, s.speed * profile.pace * (self.delivery()[0] if self.delivery else 1.0))
         with self._lock, torch.inference_mode():
+            tts, speaker_id = self._model_for(profile)
             bert, ja_bert, phones, tones, lang_ids = melo_utils.get_text_for_tts_infer(
                 text, tts.language, tts.hps, tts.device, tts.symbol_to_id
             )
@@ -131,7 +156,7 @@ class MeloEngine:
             audio = tts.model.infer(
                 x,
                 torch.LongTensor([phones.size(0)]).to(device),
-                torch.LongTensor([self._speaker_id]).to(device),
+                torch.LongTensor([speaker_id]).to(device),
                 tones.to(device).unsqueeze(0),
                 lang_ids.to(device).unsqueeze(0),
                 bert.to(device).unsqueeze(0),
@@ -139,7 +164,7 @@ class MeloEngine:
                 sdp_ratio=s.sdp_ratio if profile.sdp_ratio is None else profile.sdp_ratio,
                 noise_scale=s.noise_scale if profile.noise_scale is None else profile.noise_scale,
                 noise_scale_w=s.noise_scale_w if profile.noise_scale_w is None else profile.noise_scale_w,
-                length_scale=length_scale_factor(profile) / max(0.5, s.speed * profile.pace),
+                length_scale=length_scale_factor(profile) / pace,
             )[0][0, 0]
             raw = audio.float().cpu().numpy().astype(np.float32)
         if profile.clone:
@@ -281,7 +306,7 @@ def tighten_pauses(audio: np.ndarray, rate: int, longest_s: float = 0.17, thresh
     return audio[keep]
 
 
-def join_smoothly(audio: np.ndarray, text: str, rate: int) -> np.ndarray:
+def join_smoothly(audio: np.ndarray, text: str, rate: int, pause_scale: float = 1.0) -> np.ndarray:
     """Trim a chunk's own silence, fade its edges and end it with a natural pause for its punctuation.
 
     Chunks are played back to back, so this sets the rhythm between them: a breath after a sentence, a
@@ -289,7 +314,7 @@ def join_smoothly(audio: np.ndarray, text: str, rate: int) -> np.ndarray:
     """
     if audio.size == 0:
         return audio
-    clip = tighten_pauses(trim_silence(audio, rate).astype(np.float32, copy=True), rate)
+    clip = tighten_pauses(trim_silence(audio, rate).astype(np.float32, copy=True), rate, 0.17 * pause_scale)
     fade = min(clip.size // 4, int(rate * 0.006))
     if fade > 1:
         ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
@@ -297,7 +322,7 @@ def join_smoothly(audio: np.ndarray, text: str, rate: int) -> np.ndarray:
         clip[-fade:] *= ramp[::-1]
     ending = text.rstrip()[-1:] if text.strip() else ""
     kind = "sentence" if ending in ".!?" else "clause" if ending in ",;:-" else "none"
-    pause = np.zeros(int(rate * PAUSE_AFTER_S[kind]), dtype=np.float32)
+    pause = np.zeros(int(rate * PAUSE_AFTER_S[kind] * pause_scale), dtype=np.float32)
     return np.concatenate([clip, pause])
 
 
@@ -313,6 +338,8 @@ class Synthesizer:
         self._cache_size = cache_size
         self._cache_lock = threading.Lock()
         self.output_rate = OUTPUT_RATE
+        self.delivery = None  # () -> (pace multiplier, pause scale): the personality's delivery
+        self.profile_pauses = None  # () -> the voice profile's pause scale
 
     @property
     def engine_name(self) -> str:
@@ -334,14 +361,16 @@ class Synthesizer:
         text = text.strip()
         if not text:
             return np.zeros(0, dtype=np.float32)
-        key = text.lower()
+        pace, pause_scale = self.delivery() if self.delivery else (1.0, 1.0)
+        pause_scale *= self.profile_pauses() if self.profile_pauses else 1.0
+        key = f"{pace:.2f}|{pause_scale:.2f}|{text.lower()}"
         if len(text) <= self.CACHE_MAX_CHARS:
             with self._cache_lock:
                 cached = self._cache.get(key)
                 if cached is not None:
                     self._cache.move_to_end(key)
                     return cached
-        audio = join_smoothly(self._synthesize_with_fallback(text), text, self.output_rate)
+        audio = join_smoothly(self._synthesize_with_fallback(text), text, self.output_rate, pause_scale)
         if len(text) <= self.CACHE_MAX_CHARS and audio.size:
             with self._cache_lock:
                 self._cache[key] = audio
@@ -389,4 +418,6 @@ def build_synthesizer(settings: TTSSettings, temp_dir: Path, models_dir: Path | 
         engines.append(MeloEngine(settings, models_dir))
     if settings.engine == "sapi" or settings.fallback:
         engines.append(SapiEngine(settings, temp_dir))
-    return Synthesizer(engines)
+    synth = Synthesizer(engines)
+    synth.profile_pauses = lambda: get_profile(profile_for(settings.voice_profile)).pause_scale
+    return synth

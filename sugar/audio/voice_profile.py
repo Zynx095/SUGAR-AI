@@ -50,12 +50,27 @@ class VoiceProfile:
     eq: tuple[tuple[float, float], ...] = ()  # (Hz, dB) curve fitted to a reference voice (tools/fit_voice.py)
     clone: bool = False  # convert MeloTTS speech to the reference speaker (sugar/audio/voice_clone.py)
     clone_air_db: float = 0.0  # level of the >9.5 kHz band kept from the original synthesis (treble)
+    # base speaker: MeloTTS language model and speaker id (None = tts.voice / EN_NEWEST)
+    model: str | None = None
+    speaker: str | None = None
+    # character (the blue voice): intonation and synthetic colour
+    contour: float = 1.0  # > 1 exaggerates the pitch movement around the speaker's median (livelier delivery)
+    quantize: float = 0.0  # 0–1: pull each pitch toward the nearest semitone (a playful, tuned robot)
+    ring_hz: float = 0.0  # ring-modulation carrier (Hz) for a light synthetic buzz
+    ring_depth: float = 0.0  # 0–0.5
+    comb: float = 0.0  # level of a short "small metal speaker" resonance, 0–0.4
+    comb_ms: float = 2.2
+    pause_scale: float = 1.0  # > 1 keeps longer pauses between sentences (timing for jokes)
 
     @property
     def neutral(self) -> bool:
         return (self.register == 1.0 and not self.pitch_steps and not self.sub_octave and not self.edge
                 and not self.low_shelf_db and not self.presence_db and not self.air_db and not self.compression
-                and not self.eq)
+                and not self.eq and not self.character)
+
+    @property
+    def character(self) -> bool:
+        return self.contour != 1.0 or bool(self.quantize or self.ring_depth or self.comb)
 
 
 MATCH_FILE = Path(__file__).with_name("sid_voice_match.json")
@@ -88,9 +103,18 @@ PROFILES: dict[str, VoiceProfile] = {
     # The female voice: MeloTTS's own EN-Newest speaker (a genuine female voice, not a pitch-shifted male),
     # lightly levelled and brightened.
     "female": VoiceProfile("female", presence_db=0.5, air_db=1.0, compression=0.3),
-    # A calm mid-register voice between the two.
+    # The old calm mid-register voice (the EN-Newest speaker 3 semitones down). Kept for reference only:
+    # it measured 0.86 speaker similarity to the female voice, so it no longer backs any identity.
     "neutral": VoiceProfile("neutral", register=0.95, pitch_steps=-3.0, pitch_method="psola", low_shelf_db=1.0,
                             compression=0.4),
+    # The blue voice: a different base speaker (MeloTTS English v1, Australian, naturally lively), a smaller
+    # "tin" resonance, semitone-tuned and slightly exaggerated intonation, and a light ring-modulated buzz —
+    # a playful robot, not a re-pitched female voice. Chosen by measurement (tools/evaluate_voices.py):
+    # speaker similarity 0.39 to the female voice and 0.41 to SID, Whisper WER 2 %.
+    "blue": VoiceProfile("blue", model="EN", speaker="EN-AU", register=0.92, pitch_steps=-4.0, contour=1.12,
+                         quantize=0.6, ring_hz=80.0, ring_depth=0.25, comb=0.3, comb_ms=1.6, low_shelf_db=-2.0,
+                         presence_db=3.0, air_db=1.0, compression=0.5, sdp_ratio=0.6, noise_scale=0.6,
+                         noise_scale_w=0.9, pace=1.07, pause_scale=1.6),
 }
 
 
@@ -195,16 +219,20 @@ def _yin_f0(x: np.ndarray, rate: int, hop: int) -> tuple[np.ndarray, np.ndarray]
     return f0, voiced
 
 
-def _psola(x: np.ndarray, rate: int, ratio: float) -> np.ndarray:
+def _psola(x: np.ndarray, rate: int, ratio, *, f0_track: tuple[np.ndarray, np.ndarray] | None = None) -> np.ndarray:
     """TD-PSOLA: multiply pitch by ``ratio`` keeping duration, formants and the full bandwidth.
+
+    ``ratio`` is a number, or a function ``(f0, voiced) -> per-frame ratios`` (frames of 256 samples) for
+    pitch that moves differently over time (exaggerated or tuned intonation).
 
     Voiced speech is cut into two-period grains centred on pitch marks (aligned to waveform peaks) and
     re-spaced at the new period; unvoiced sounds (s, t, f — the treble that carries articulation) are
     overlap-added at their own spacing, untouched.
     """
     hop = 256
-    f0, voiced = _yin_f0(x, rate, hop)
+    f0, voiced = f0_track if f0_track is not None else _yin_f0(x, rate, hop)
     n = x.size
+    ratios = np.asarray(ratio(f0, voiced), dtype=np.float64) if callable(ratio) else np.full(f0.size, float(ratio))
 
     def frame_of(t: float) -> int:
         return min(f0.size - 1, max(0, int(t / hop)))
@@ -249,7 +277,7 @@ def _psola(x: np.ndarray, rate: int, ratio: float) -> np.ndarray:
         if start >= 0 and start + grain.size <= out.size:
             out[start:start + grain.size] += grain * window
             weight[start:start + grain.size] += window
-        position += period / ratio if flags[k] else period
+        position += period / ratios[frame_of(position)] if flags[k] else period
     # Where grains overlap more than a Hann pair would, scale back; sparse (lowered) voiced grains stay as is.
     out = out[:n] / np.maximum(weight[:n], 1.0)
     return out.astype(np.float32)
@@ -269,6 +297,43 @@ def _pitch_shift(x: np.ndarray, rate: int, steps: float) -> np.ndarray:
     if shifted.size >= x.size:
         return shifted[: x.size].astype(np.float32)
     return np.pad(shifted, (0, x.size - shifted.size)).astype(np.float32)
+
+
+def _character_ratios(profile: VoiceProfile):
+    """Per-frame pitch ratios: exaggerate the intonation around the median, then pull toward semitones."""
+    shift = 2 ** (profile.pitch_steps / 12.0)
+
+    def ratios(f0: np.ndarray, voiced: np.ndarray) -> np.ndarray:
+        out = np.full(f0.size, shift)
+        if not voiced.any():
+            return out
+        median = float(np.median(f0[voiced]))
+        target = shift * median * (f0[voiced] / median) ** profile.contour
+        if profile.quantize:
+            semis = 12 * np.log2(target / 440.0)
+            semis = semis + profile.quantize * (np.round(semis) - semis)
+            target = 440.0 * 2 ** (semis / 12)
+        out[voiced] = target / f0[voiced]
+        # a 3-frame median keeps single mis-tracked frames from jumping
+        padded = np.pad(out, 1, mode="edge")
+        return np.median(np.stack([padded[:-2], padded[1:-1], padded[2:]]), axis=0)
+
+    return ratios
+
+
+def _ring(x: np.ndarray, rate: int, hz: float, depth: float) -> np.ndarray:
+    t = np.arange(x.size, dtype=np.float64) / rate
+    return (x * (1.0 - depth + depth * np.cos(2 * np.pi * hz * t))).astype(np.float32)
+
+
+def _comb(x: np.ndarray, rate: int, level: float, ms: float) -> np.ndarray:
+    """A short feedback comb: the resonance of a small metal speaker (tinny, not echoing)."""
+    from scipy.signal import lfilter
+
+    delay = max(1, int(round(ms / 1000 * rate)))
+    a = np.zeros(delay + 1)
+    a[0], a[delay] = 1.0, -level
+    return ((1 - level) * lfilter([1.0], a, x)).astype(np.float32)
 
 
 # --------------------------------------------------------------------------- filters (RBJ biquads)
@@ -361,8 +426,10 @@ def apply_profile(audio: np.ndarray, rate: int, profile: VoiceProfile) -> np.nda
     # 1. register: resample → lower pitch and formants together
     if profile.register != 1.0:
         x = soxr.resample(x, rate, rate / profile.register).astype(np.float32)
-    # 2. pitch with formants kept
-    if profile.pitch_steps:
+    # 2. pitch with formants kept (the blue voice: exaggerated, semitone-tuned intonation)
+    if profile.contour != 1.0 or profile.quantize:
+        x = _psola(x, rate, _character_ratios(profile))
+    elif profile.pitch_steps:
         if profile.pitch_method == "psola":
             x = _psola(x, rate, 2 ** (profile.pitch_steps / 12.0))
         else:
@@ -375,6 +442,11 @@ def apply_profile(audio: np.ndarray, rate: int, profile: VoiceProfile) -> np.nda
         delay = max(1, int(round(profile.edge_ms / 1000 * rate)))
         doubled = np.concatenate([np.zeros(delay, dtype=np.float32), x[:-delay]])
         x = (1 - profile.edge) * x + profile.edge * doubled
+    # 4b. synthetic colour: small-speaker resonance and a light ring-modulated buzz
+    if profile.comb:
+        x = _comb(x, rate, profile.comb, profile.comb_ms)
+    if profile.ring_depth and profile.ring_hz:
+        x = _ring(x, rate, profile.ring_hz, profile.ring_depth)
     # 5. tone
     for b, a in _filters(profile, rate):
         x = lfilter(b, a, x).astype(np.float32)

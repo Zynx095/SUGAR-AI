@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sugar.audio.voices import IDENTITIES, describe
+from sugar.audio.voices import ALIASES, IDENTITIES, canonical, describe
 from sugar.config.settings import save_override
 from sugar.core.logging import log_event
 from sugar.intelligence.personality import PERSONALITIES
@@ -20,8 +20,23 @@ def voice_state(app) -> dict[str, Any]:
     tts = app.settings.tts
     state = describe(tts.voice_profile, tts.palettes)
     state.update({"speed": round(tts.speed, 2), "pitch_offset": round(tts.pitch_offset, 1),
-                  "volume": round(tts.volume, 2), "personality": app.settings.conversation.personality})
+                  "volume": round(tts.volume, 2)})
+    state.update(personality_state(app))
     return state
+
+
+def personality_state(app) -> dict[str, Any]:
+    state = app.personality.describe(canonical(app.settings.tts.voice_profile))
+    return {"personality": state["personality"], "personality_name": state["name"],
+            "personality_default": state["default"], "personality_temporary": state["temporary"],
+            "traits": state["traits"]}
+
+
+def publish_personality(app, reason: str) -> None:
+    state = personality_state(app)
+    app.bus.publish("personality.changed", reason=reason, name=state["personality_name"], **state)
+    log_event("PERSONALITY_CHANGED", reason=reason, personality=state["personality"],
+              temporary=state["personality_temporary"], traits=state["traits"])
 
 
 def publish_voice(app, reason: str) -> None:
@@ -42,6 +57,8 @@ def register_self_tools(app) -> None:
 
     async def set_voice(args: dict[str, Any]) -> ToolResult:
         voice = str(args["voice"]).lower()
+        voice = ALIASES.get(voice, voice)
+        previous_personality = app.personality.effective(canonical(app.settings.tts.voice_profile))
         if voice not in IDENTITIES:
             return ToolResult.failure(f"I don't have a voice called {voice}. I have: "
                                       + ", ".join(i.name for i in IDENTITIES.values()) + ".")
@@ -49,10 +66,15 @@ def register_self_tools(app) -> None:
         if args.get("reset"):
             _set(app, "tts.pitch_offset", 0.0)
         app.synth._cache.clear()
+        # A voice brings its matching personality (or the one pinned to it) — unless the user picked one this
+        # session ("be professional"), which stays: voice and personality are independent.
         publish_voice(app, "voice.set")
+        if app.personality.effective(voice) != previous_personality:
+            publish_personality(app, "voice.set")
         identity = IDENTITIES[voice]
         lines = {"female": "Switched to my female voice.", "sid": "This is my original voice.",
-                 "neutral": "Switched to my neutral voice.", "sid_v2": "Switched to my mechanical voice."}
+                 "blue": "Blue mode. Systems quirky. Sarcasm calibrated.",
+                 "sid_v2": "Switched to my mechanical voice."}
         return ToolResult(True, lines.get(voice, f"Switched to {identity.name}."), data=voice_state(app))
 
     async def adjust_voice(args: dict[str, Any]) -> ToolResult:
@@ -83,12 +105,48 @@ def register_self_tools(app) -> None:
         if personality not in PERSONALITIES:
             return ToolResult.failure("I don't have that personality. I have: "
                                       + ", ".join(p.name for p in PERSONALITIES.values()) + ".")
-        _set(app, "conversation.personality", personality)
-        app.bus.publish("personality.changed", personality=personality, name=PERSONALITIES[personality].name)
-        log_event("PERSONALITY_CHANGED", personality=personality)
-        lines = {"sid": "Back to my usual self.", "cinematic": "Very well.", "friendly": "Sure thing, I'll keep it "
-                 "friendly.", "professional": "Understood. Professional mode.", "creative": "Let's get creative."}
-        return ToolResult(True, lines[personality], data={"personality": personality})
+        voice = canonical(app.settings.tts.voice_profile)
+        persist = bool(args.get("persist"))
+        if persist:  # this voice's saved default
+            app.personality.defaults[voice] = personality
+            app.personality.clear_temporary()
+            _set(app, "conversation.personalities", dict(app.personality.defaults))
+        else:
+            turns = args.get("turns")
+            app.personality.set_temporary(personality, int(turns) if turns else None)
+        app.synth._cache.clear()
+        publish_personality(app, "personality.set")
+        lines = {"sid": "Back to my original self.", "cinematic": "Very well.",
+                 "friendly": "Sure thing, I'll keep it friendly.", "professional": "Understood. Professional mode.",
+                 "creative": "Let's get creative.", "female": "Alright, this is me being myself.",
+                 "blue": "Blue personality engaged. Brace yourself for excellence."}
+        line = lines[personality]
+        if persist:
+            line += " That's my default for this voice now."
+        elif args.get("turns"):
+            line += " For the next few answers."
+        return ToolResult(True, line, data=personality_state(app))
+
+    async def reset_personality(args: dict[str, Any]) -> ToolResult:
+        voice = canonical(app.settings.tts.voice_profile)
+        app.personality.clear_temporary()
+        app.personality.traits.clear()
+        if args.get("persist") and voice in app.personality.defaults:
+            app.personality.defaults.pop(voice)
+            _set(app, "conversation.personalities", dict(app.personality.defaults))
+        app.synth._cache.clear()
+        publish_personality(app, "personality.reset")
+        return ToolResult(True, "Back to normal.", data=personality_state(app))
+
+    async def personality_trait(args: dict[str, Any]) -> ToolResult:
+        trait, delta = str(args["trait"]), int(args["delta"])
+        value = app.personality.nudge(trait, 1 if delta > 0 else -1)
+        publish_personality(app, f"trait.{trait}")
+        lines = {("sarcasm", True): "Sarcasm levels rising. This will go wonderfully.",
+                 ("sarcasm", False): "Less sarcasm. Sincerely.",
+                 ("humour", True): "I'll be funnier.", ("humour", False): "Fewer jokes. Got it.",
+                 ("brevity", True): "Shorter answers.", ("brevity", False): "I'll go into more detail."}
+        return ToolResult(True, lines[(trait, delta > 0)], data={"trait": trait, "value": value})
 
     async def end_roleplay(args: dict[str, Any]) -> ToolResult:
         if app.working.roleplay is None:
@@ -108,7 +166,7 @@ def register_self_tools(app) -> None:
                               + (" from now on." if args.get("persist") else " for this session."))
         return ToolResult(True, "Okay. Your personal health details stay on this computer.")
 
-    registry.register(Tool("voice.set", "Switch SID's voice (and its matching colours): sid, female, neutral, sid_v2.",
+    registry.register(Tool("voice.set", "Switch SID's voice (and its matching colours): sid, female, blue, sid_v2.",
                            params(["voice"], voice={"type": "string", "enum": sorted(IDENTITIES)},
                                   reset={"type": "boolean", "default": False}),
                            set_voice, PermissionLevel.NON_DESTRUCTIVE, 10, SELF))
@@ -116,10 +174,19 @@ def register_self_tools(app) -> None:
                            params(["setting", "delta"], setting={"type": "string", "enum": ["speed", "pitch", "volume"]},
                                   delta={"type": "number"}),
                            adjust_voice, PermissionLevel.NON_DESTRUCTIVE, 10, SELF))
-    registry.register(Tool("personality.set", "Switch SID's personality: sid, cinematic, friendly, professional, "
-                           "creative.", params(["personality"], personality={"type": "string",
-                                                                              "enum": sorted(PERSONALITIES)}),
+    registry.register(Tool("personality.set", "Switch SID's personality (" + ", ".join(sorted(PERSONALITIES))
+                           + "). persist=true saves it as this voice's default; otherwise it lasts this session "
+                           "(or `turns` replies).",
+                           params(["personality"], personality={"type": "string", "enum": sorted(PERSONALITIES)},
+                                  persist={"type": "boolean", "default": False}, turns={"type": "integer"}),
                            set_personality, PermissionLevel.NON_DESTRUCTIVE, 10, SELF))
+    registry.register(Tool("personality.reset", "Drop temporary personality changes and trait nudges.",
+                           params(persist={"type": "boolean", "default": False}), reset_personality,
+                           PermissionLevel.NON_DESTRUCTIVE, 10, SELF))
+    registry.register(Tool("personality.trait", "Nudge a trait for this session: sarcasm, humour or brevity, by +1/-1.",
+                           params(["trait", "delta"], trait={"type": "string", "enum": ["sarcasm", "humour", "brevity"]},
+                                  delta={"type": "integer"}), personality_trait,
+                           PermissionLevel.NON_DESTRUCTIVE, 10, SELF))
     registry.register(Tool("roleplay.end", "End the current roleplay.", params(), end_roleplay,
                            PermissionLevel.READ, 5, SELF))
     registry.register(Tool("health.authorize", "Allow or stop sending personal health information to online models.",

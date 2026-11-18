@@ -269,7 +269,12 @@ function handleEvent(event) {
       applyVoice(data, true);
       break;
     case "personality.changed":
-      if (ui.voice) ui.voice.personality = data.personality;
+      if (ui.voice) {
+        ui.voice.personality = data.personality;
+        ui.voice.personality_name = data.personality_name;
+        ui.voice.personality_default = data.personality_default;
+        ui.voice.personality_temporary = data.personality_temporary;
+      }
       renderVoices();
       break;
     case "providers.status":
@@ -964,7 +969,12 @@ function renderVoices() {
     for (const p of ui.personalities) select.add(new Option(p.name, p.id));
     select.addEventListener("change", () => send("personality.set", { personality: select.value }));
   }
-  if (select && ui.voice) select.value = ui.voice.personality || "sid";
+  if (select && ui.voice) select.value = ui.voice.personality_default || ui.voice.personality || "sid";
+  const note = $("personalityNote");
+  if (note && ui.voice) {
+    // A spoken change ("be serious for a moment") lasts this session; the menu is the saved default.
+    note.textContent = ui.voice.personality_temporary ? `· now ${ui.voice.personality_name} (this session)` : "";
+  }
 }
 
 function bindSetting(id, key, format) {

@@ -34,6 +34,7 @@ from sugar.intelligence.context import ContextBuilder
 from sugar.intelligence.domain import REFUSAL
 from sugar.intelligence.fastpath import Intent
 from sugar.intelligence.health import emergency_message
+from sugar.intelligence.personality import action_line, serious_context
 from sugar.intelligence.router import Route, RouteDecision, Router
 from sugar.intelligence.working import WorkingMemory
 from sugar.providers.pool import AllProvidersFailed, ProviderPool
@@ -221,7 +222,36 @@ class Orchestrator:
         self._state = shared_state
         self.pending: PendingTask | None = None
 
+    personality = None  # PersonalityState, set by the app ("for a moment" overrides count down per answer)
+
     async def handle(self, text: str, out: TurnOutput, decision: RouteDecision | None = None) -> TurnSummary:
+        summary = await self._handle(text, out, decision)
+        if self.personality is not None and summary.route in ("answer", "desktop", "coding_qa"):
+            self.personality.turn_finished()
+        return summary
+
+    def _style(self, text: str, category: str | None) -> tuple[bool, float | None]:
+        """(serious?, temperature) for a model call under the current personality."""
+        serious = serious_context(text, category)
+        personality, _ = self._context.personality()
+        temperature = min(personality.temperature, 0.4) if serious else personality.temperature
+        return serious, temperature
+
+    def _flavour(self, name: str, args: dict[str, Any], result: ToolResult) -> str:
+        """The personality's way of acknowledging a finished desktop action (plain summary otherwise)."""
+        kind = {"app.open": "open", "app.close": "close"}.get(name)
+        if not kind or not result.ok:
+            return result.summary
+        data = result.data if isinstance(result.data, dict) else {}
+        app = str(data.get("target") or args.get("name") or "").strip()
+        if not app or len(app) > 40 or app.lower() in ("this", "that", "it", "last_opened"):
+            return result.summary
+        if not re.match(r"^(?:Opened|Opening|Switched|Closed|Closing|Focused)\b", result.summary):
+            return result.summary  # something other than a plain success ("save changes?") — say it as is
+        personality, _ = self._context.personality()
+        return action_line(personality, kind, result.summary, app=app[:1].upper() + app[1:])
+
+    async def _handle(self, text: str, out: TurnOutput, decision: RouteDecision | None = None) -> TurnSummary:
         # Answering "which project?" with a bare name resumes the request that was waiting for it.
         if decision is None and self.pending is not None and self.pending.fresh:
             project = self.router.project_reply(text)
@@ -331,7 +361,7 @@ class Orchestrator:
         result: ToolResult = await self._executor.execute(name, args, origin="user")
         out.trace.mark("tool_done")
         if result.speak or not result.ok:
-            out.say(result.summary)
+            out.say(self._flavour(name, args, result))
         if result.display:
             out.show(result.display)
         return TurnSummary(route, tools=[name], ok=result.ok)
@@ -452,7 +482,7 @@ class Orchestrator:
                 out.trace.mark("tool_done")
                 return TurnSummary("desktop", tools=tools, ok=False)
             if result.speak:
-                out.say(result.summary)
+                out.say(self._flavour(name, args, result))
                 spoke = True
             if isinstance(result.data, dict) and result.data.get("waiting_for"):
                 break  # an app asked a question ("save changes?"); let the user answer first
@@ -463,7 +493,8 @@ class Orchestrator:
 
     async def _operate(self, text: str, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
         """Free-form computer operation: a model with the full computer toolset (permission-checked)."""
-        messages = self._context.build(text, instructions=DESKTOP_INSTRUCTIONS)
+        serious, temperature = self._style(text, decision.category)
+        messages = self._context.build(text, instructions=DESKTOP_INSTRUCTIONS, serious=serious)
         tools_used: list[str] = []
 
         def on_tool(record: ToolRecord) -> None:
@@ -472,7 +503,7 @@ class Orchestrator:
                 out.show(record.result.display)
 
         try:
-            result = await self._agent_loop_run(messages, decision, out, on_tool)
+            result = await self._agent_loop_run(messages, decision, out, on_tool, temperature)
         except AllProvidersFailed as exc:
             log.warning("all providers failed: %s", exc)
             out.say(self._offline_message())
@@ -483,7 +514,7 @@ class Orchestrator:
         out.trace.info.update({"provider": result.provider, "model": result.model, "steps": result.steps})
         return TurnSummary("desktop", result.provider, result.model, tools_used)
 
-    async def _agent_loop_run(self, messages, decision: RouteDecision, out: TurnOutput, on_tool):
+    async def _agent_loop_run(self, messages, decision: RouteDecision, out: TurnOutput, on_tool, temperature=None):
         return await self._agent.run(
             messages,
             chain=decision.chain or self._settings.llm.chat_chain,
@@ -495,6 +526,7 @@ class Orchestrator:
             trace=out.trace,
             max_steps=10,
             user_origin=user_origin(getattr(out, "source", "text")),
+            temperature=temperature,
         )
 
     # ------------------------------------------------------------------ programming questions
@@ -526,7 +558,9 @@ class Orchestrator:
         if decision.local_only:
             instructions += ("\nThe user's personal health information stays on this computer: you are a local "
                              "model. Be especially careful about what you are unsure of.")
-        messages = self._context.build(text, instructions=instructions or None, context_tag=context_tag)
+        serious, temperature = self._style(text, category)
+        messages = self._context.build(text, instructions=instructions or None, context_tag=context_tag,
+                                       serious=serious)
         tools_used: list[str] = []
 
         def on_tool(record: ToolRecord) -> None:
@@ -547,6 +581,7 @@ class Orchestrator:
                 max_steps=max(1, decision.max_steps),
                 model_for=self._model_overrides(decision),
                 user_origin=user_origin(getattr(out, "source", "text")),
+                temperature=temperature,
             )
         except AllProvidersFailed as exc:
             log.warning("all providers failed: %s", exc)
@@ -561,7 +596,8 @@ class Orchestrator:
 
     async def _answer(self, text: str, decision: RouteDecision, out: TurnOutput) -> TurnSummary:
         chain = decision.chain or self._settings.llm.chat_chain
-        messages = self._context.build(text, instructions=QA_INSTRUCTIONS)
+        serious, temperature = self._style(text, decision.category)
+        messages = self._context.build(text, instructions=QA_INSTRUCTIONS, serious=serious)
         tools_used: list[str] = []
 
         def on_tool(record: ToolRecord) -> None:  # never called: the QA path has no tools
@@ -579,6 +615,7 @@ class Orchestrator:
                 trace=out.trace,
                 max_steps=1,
                 model_for=self._model_overrides(decision),
+                temperature=temperature,
             )
         except AllProvidersFailed as exc:
             log.warning("all providers failed: %s", exc)
