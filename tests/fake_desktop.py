@@ -61,6 +61,9 @@ class FakeWindow:
     maximized: bool = False
     rect: tuple[int, int, int, int] = (100, 100, 900, 700)
     closed_tabs: list[Tab] = field(default_factory=list)
+    elements: list[Any] = field(default_factory=list)  # sugar.computer.elements.Element
+    scroll: dict[int, dict[str, Any]] = field(default_factory=dict)  # element id -> scroll state
+    on_act: Any = None  # callable(window, element, action) — side effects of clicking
 
     def info(self) -> WindowInfo:
         title = self.title
@@ -426,6 +429,9 @@ class FakeDesktop:
 
     def mouse_move(self, x: int, y: int) -> None:
         self.mouse.append(("move", x, y))
+        self.pointer = (x, y)
+
+    pointer: tuple[int, int] = (0, 0)
 
     def mouse_button(self, button: str, *, up: bool) -> None:
         self.mouse.append(("up" if up else "down", button))
@@ -434,7 +440,71 @@ class FakeDesktop:
         self.mouse.append(("wheel", clicks, horizontal))
 
     def cursor(self) -> tuple[int, int]:
-        return (0, 0)
+        return self.pointer
+
+    # ------------------------------------------------------------------ UI Automation snapshot (semantic clicks)
+
+    def snapshot(self, hwnd: int, limit: int = 1500) -> list[Any]:
+        window = self.windows.get(hwnd)
+        return list(window.elements[:limit]) if window else []
+
+    def act(self, hwnd: int, element_id: int, action: str = "click") -> str | None:
+        from dataclasses import replace
+
+        window = self.windows.get(hwnd)
+        element = next((e for e in window.elements if e.id == element_id), None) if window else None
+        if element is None:
+            return None
+        self.mouse.append(("act", element.name, action))
+        method = None
+        if element.toggled is not None and action in ("click", "toggle"):
+            window.elements[window.elements.index(element)] = replace(element, toggled=not element.toggled)
+            method = "toggle"
+        elif "select" in element.patterns and action in ("click", "select"):
+            window.elements[window.elements.index(element)] = replace(element, selected=True)
+            method = "selection_item"
+        elif "invoke" in element.patterns:
+            method = "invoke"
+        elif action == "focus" or element.kind in ("edit", "combobox"):
+            self.focused_element = (hwnd, element_id)
+            method = "focus"
+        if window.on_act is not None:
+            window.on_act(window, element, action)
+        return method
+
+    focused_element: tuple[int, int] | None = None
+
+    def element_state(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        window = self.windows.get(hwnd)
+        element = next((e for e in window.elements if e.id == element_id), None) if window else None
+        if element is None:
+            return None
+        return {"alive": True, "toggled": element.toggled, "selected": element.selected,
+                "focused": self.focused_element == (hwnd, element_id)}
+
+    def scroll_info(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        window = self.windows.get(hwnd)
+        return dict(window.scroll[element_id]) if window and element_id in window.scroll else None
+
+    def scroll(self, hwnd: int, element_id: int, *, vertical: int = 2, horizontal: int = 2,
+               v_percent: float | None = None, h_percent: float | None = None) -> bool:
+        window = self.windows.get(hwnd)
+        if not window or element_id not in window.scroll:
+            return False
+        state = window.scroll[element_id]
+        if v_percent is not None:
+            state["v_percent"] = v_percent
+        step = {0: -25.0, 1: -5.0, 2: 0.0, 3: 25.0, 4: 5.0}[vertical]
+        state["v_percent"] = max(0.0, min(100.0, state["v_percent"] + step))
+        state.setdefault("log", []).append((vertical, horizontal, v_percent))
+        return True
+
+    def focused_scrollable(self, hwnd: int) -> Any:
+        window = self.windows.get(hwnd)
+        if window and self.focused_element and self.focused_element[0] == hwnd:
+            element = next(e for e in window.elements if e.id == self.focused_element[1])
+            return element.rect
+        return None
 
     # ------------------------------------------------------------------ clipboard
 

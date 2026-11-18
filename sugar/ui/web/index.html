@@ -48,6 +48,10 @@
 
       <section class="presence" aria-label="SID status">
         <p class="status" id="status" aria-live="polite">Connecting</p>
+        <div class="badges" aria-live="polite">
+          <span class="badge badge-camera" id="cameraBadge" hidden><span class="badge-dot" aria-hidden="true"></span><span id="cameraText">Camera on</span></span>
+          <span class="badge badge-dictation" id="dictationBadge" hidden><span id="dictationText">Dictating</span></span>
+        </div>
         <p class="hearing" id="hearing" aria-live="polite"></p>
 
         <section class="permission" id="permission" hidden aria-live="assertive">
@@ -87,7 +91,7 @@
         <div id="voiceList"></div>
       </fieldset>
       <label class="field">
-        <span>Personality</span>
+        <span>Personality for this voice <output id="personalityNote"></output></span>
         <select id="personality"></select>
       </label>
       <label class="field">

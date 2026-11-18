@@ -11,7 +11,8 @@ automatically.
 | Repository, venv, `data/` (SQLite memory, telemetry, overrides, logs, voice samples) | `D:\College\SOMESHIT DOWNLOADS\SUGAR-AI` | — |
 | Whisper models (small.en, large-v3-turbo) | `D:\Sugar_Models\Whisper` | 2.2 GB |
 | Ollama 0.40.16 portable binary + `qwen2.5:3b` | `D:\Sugar_Models\ollama` (models in `…\ollama\models`, 1.8 GB) | 4.0 GB |
-| Hugging Face cache (MeloTTS English, BERT) | `D:\Sugar_Models\hf` | 1.3 GB |
+| Hugging Face cache (MeloTTS English v3 + v1 for the blue voice + v2 unused, BERT) | `D:\Sugar_Models\hf` | 1.6 GB |
+| Vision model `qwen3-vl:4b` (screen and camera understanding) | `D:\Sugar_Models\ollama\models` | 3.3 GB |
 | OpenVoice V2 converter | `D:\Sugar_Models\OpenVoiceV2` | 126 MB |
 | pip cache (`PIP_CACHE_DIR`) | `D:\pipcache` | 0.45 GB |
 | Temporary audio and test files (`TMP`/`TEMP` for runs) | `D:\Sugar_Models\tmp` | 189 MB |

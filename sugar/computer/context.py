@@ -77,7 +77,14 @@ class DesktopContext:
             self._stop()
             self._stop = None
 
+    protected: set[int] = set()  # windows SID must never act on (e.g. the terminal it was started from)
+
+    def protect(self, hwnd: int) -> None:
+        self.protected = {*self.protected, hwnd}
+
     def is_own(self, window: WindowInfo) -> bool:
+        if window.hwnd in self.protected:
+            return True
         own_pid = getattr(self._backend, "own_pid", 0)
         if own_pid and window.pid == own_pid:
             return True
@@ -145,7 +152,7 @@ class DesktopContext:
         with self._lock:
             recent = list(self._recent)
         for window in recent:
-            if self._alive(window):
+            if window.hwnd not in self.protected and self._alive(window):
                 return window
         return None
 

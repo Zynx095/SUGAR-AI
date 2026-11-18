@@ -317,6 +317,15 @@ class WindowsDesktop:
     def mouse_move(self, x: int, y: int) -> None:
         w.user32.SetCursorPos(int(x), int(y))
 
+    def pointer_move(self, x: int, y: int) -> None:
+        """A real input-stream mouse move (SendInput, absolute on the virtual desktop): drags in apps that ignore
+        SetCursorPos while a button is held (Paint's canvas)."""
+        vx, vy = w.user32.GetSystemMetrics(76), w.user32.GetSystemMetrics(77)
+        vw, vh = max(2, w.user32.GetSystemMetrics(78)), max(2, w.user32.GetSystemMetrics(79))
+        nx = int((int(x) - vx) * 65535 / (vw - 1))
+        ny = int((int(y) - vy) * 65535 / (vh - 1))
+        w.send_inputs(w.mouse_input(dx=nx, dy=ny, flags=0x0001 | 0x8000 | 0x4000))  # MOVE | ABSOLUTE | VIRTUALDESK
+
     def mouse_button(self, button: str, *, up: bool) -> None:
         down_flag, up_flag = w.MOUSE_BUTTONS[button]
         w.send_inputs(w.mouse_input(flags=up_flag if up else down_flag))
@@ -461,6 +470,27 @@ class WindowsDesktop:
 
     def describe_ui(self, hwnd: int, limit: int = 150) -> list[dict[str, Any]]:
         return self.uia.describe_ui(hwnd, limit)
+
+    def snapshot(self, hwnd: int, limit: int = 1500) -> list[Any]:
+        return self.uia.snapshot(hwnd, limit)
+
+    def act(self, hwnd: int, element_id: int, action: str = "click") -> str | None:
+        return self.uia.act(hwnd, element_id, action)
+
+    def element_state(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        return self.uia.element_state(hwnd, element_id)
+
+    def scroll_info(self, hwnd: int, element_id: int) -> dict[str, Any] | None:
+        return self.uia.scroll_info(hwnd, element_id)
+
+    def scroll(self, hwnd: int, element_id: int, **kwargs: Any) -> bool:
+        return self.uia.scroll(hwnd, element_id, **kwargs)
+
+    def focused_scrollable(self, hwnd: int) -> Any:
+        return self.uia.focused_scrollable(hwnd)
+
+    def find_text(self, hwnd: int, text: str, *, backward: bool = True, select: bool = True) -> bool:
+        return self.uia.find_text(hwnd, text, backward=backward, select=select)
 
     # ------------------------------------------------------------------ media sessions (SMTC)
 

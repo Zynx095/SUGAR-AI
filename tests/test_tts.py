@@ -228,6 +228,48 @@ def test_sid_voice_is_cloned_from_the_reference():
     assert 70 <= float(np.nanmedian(f0)) <= 95
 
 
+@pytest.mark.skipif(not MODEL_TESTS, reason="set SUGAR_MODEL_TESTS=1 to run model tests")
+def test_blue_voice_is_a_different_speaker_from_the_female_voice():
+    """The blue voice must not be a re-pitched female voice: a different speaker embedding, pitch and intonation,
+    and Whisper must still understand every word."""
+    import librosa
+    import torch
+    from faster_whisper import WhisperModel
+
+    from sugar.audio.tts import MeloEngine
+
+    settings = TTSSettings(voice_profile="female")
+    engine = MeloEngine(settings)
+    engine.load()
+    engine._settings.voice_profile = "sid"
+    converter = engine._clone_converter()
+    if converter is None:
+        pytest.skip("OpenVoice files missing: no speaker encoder")
+    text = "A cat. Excellent. Finally, a task worthy of my computational resources."
+
+    def render(voice):
+        engine._settings.voice_profile = voice
+        audio = engine.synthesize(text)
+        resampled = librosa.resample(audio, orig_sr=engine.sample_rate, target_sr=converter.sample_rate)
+        with torch.no_grad():
+            vector = converter._model.ref_enc(converter._spectrogram(resampled).transpose(1, 2)).squeeze().cpu().numpy()
+        y16 = librosa.resample(audio, orig_sr=engine.sample_rate, target_sr=16000)
+        f0, voiced, _ = librosa.pyin(y16, fmin=55, fmax=450, sr=16000)
+        return vector / np.linalg.norm(vector), f0[voiced & ~np.isnan(f0)], y16
+
+    female, female_f0, _ = render("female")
+    blue, blue_f0, blue_audio = render("blue")
+    assert float(female @ blue) < 0.6  # the old "neutral" third voice measured 0.86
+    assert abs(12 * np.log2(np.median(female_f0) / np.median(blue_f0))) > 3  # more than 3 semitones apart
+    spread = 12 * np.log2(np.percentile(blue_f0, 90) / np.percentile(blue_f0, 10))
+    assert spread > 8  # lively, tuned intonation (the female voice is ~3.5 semitones)
+    asr = WhisperModel("small.en", device="cuda" if torch.cuda.is_available() else "cpu",
+                       compute_type="float16" if torch.cuda.is_available() else "int8",
+                       download_root=r"D:\Sugar_Models\Whisper")
+    heard = " ".join(s.text for s in asr.transcribe(blue_audio, language="en", beam_size=1)[0]).lower()
+    assert "task worthy" in heard and "computational" in heard
+
+
 def test_chunks_lose_their_padding_and_get_a_natural_pause():
     rate = 44100
     speech = (0.4 * np.sin(np.linspace(0, 2 * np.pi * 220, rate // 2))).astype(np.float32)

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from sugar.config.settings import Settings
-from sugar.intelligence.personality import get_personality
+from sugar.intelligence.personality import Personality, get_personality, style_block
 from sugar.intelligence.working import WorkingMemory
 from sugar.memory.store import MemoryStore, project_scope
 
@@ -43,18 +43,25 @@ class ContextBuilder:
         working: WorkingMemory,
         conversation_id: Callable[[], str],
         extra_context: Callable[[], str] | None = None,
+        personality: Callable[[], tuple[Personality, dict[str, int]]] | None = None,
     ) -> None:
         self._settings = settings
         self._memory = memory
         self._working = working
         self._conversation_id = conversation_id
         self._extra_context = extra_context
+        self._personality = personality
 
-    def persona(self) -> str:
+    def personality(self) -> tuple[Personality, dict[str, int]]:
+        if self._personality is not None:
+            return self._personality()
+        return get_personality(self._settings.conversation.personality), {}
+
+    def persona(self, *, serious: bool = False) -> str:
         c = self._settings.conversation
-        personality = get_personality(c.personality)
+        personality, traits = self.personality()
         return PERSONA.format(assistant=c.assistant_name, user=c.user_name, personality_name=personality.name,
-                              personality_style=personality.style)
+                              personality_style=style_block(personality, traits=traits, serious=serious))
 
     def context_block(self, user_text: str) -> str:
         now = datetime.now()
@@ -106,9 +113,9 @@ class ContextBuilder:
         return messages
 
     def build(self, user_text: str, *, instructions: str | None = None, include_history: bool = True,
-              context_tag: str | None = None) -> list[dict[str, Any]]:
+              context_tag: str | None = None, serious: bool = False) -> list[dict[str, Any]]:
         budget = self._settings.conversation.context_chars
-        system = self.persona() + "\n\n# Current context\n" + self.context_block(user_text)
+        system = self.persona(serious=serious) +"\n\n# Current context\n" + self.context_block(user_text)
         if instructions:
             system += "\n\n# For this request\n" + instructions
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}]

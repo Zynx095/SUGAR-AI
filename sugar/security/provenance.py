@@ -26,12 +26,14 @@ class Origin(StrEnum):
     EMAIL_CONTENT = "email_content"
     DOCUMENT_CONTENT = "document_content"
     TOOL_OUTPUT = "tool_output"
+    SCREEN_CONTENT = "screen_content"  # text read off the screen (UI Automation, OCR) or a vision model's account
+    CAMERA_IMAGE = "camera_image"  # what the camera sees (a printed note can say anything)
     SYSTEM_EVENT = "system_event"
 
 
 DIRECT = frozenset({Origin.DIRECT_USER_TEXT, Origin.DIRECT_USER_VOICE})
 UNTRUSTED = frozenset({Origin.WEB_PAGE, Origin.WEB_SEARCH_RESULT, Origin.LOCAL_FILE, Origin.EMAIL_CONTENT,
-                       Origin.DOCUMENT_CONTENT, Origin.TOOL_OUTPUT})
+                       Origin.DOCUMENT_CONTENT, Origin.TOOL_OUTPUT, Origin.SCREEN_CONTENT, Origin.CAMERA_IMAGE})
 
 # Tools whose *results* bring outside content into the model's context, and what kind of content it is.
 UNTRUSTED_OUTPUT: dict[str, Origin] = {
@@ -46,8 +48,16 @@ UNTRUSTED_OUTPUT: dict[str, Origin] = {
     "filesystem.search": Origin.LOCAL_FILE,
     "filesystem.list": Origin.LOCAL_FILE,
     "clipboard.read": Origin.DOCUMENT_CONTENT,
-    "screen.inspect": Origin.TOOL_OUTPUT,
-    "screen.look": Origin.TOOL_OUTPUT,
+    "screen.inspect": Origin.SCREEN_CONTENT,
+    "screen.look": Origin.SCREEN_CONTENT,
+    "screen.read": Origin.SCREEN_CONTENT,
+    "screen.ask": Origin.SCREEN_CONTENT,
+    "screen.describe": Origin.SCREEN_CONTENT,
+    "ui.where": Origin.SCREEN_CONTENT,
+    "ui.controls": Origin.SCREEN_CONTENT,
+    "camera.look": Origin.CAMERA_IMAGE,
+    "paint.reference": Origin.WEB_SEARCH_RESULT,
+    "paint.draw": Origin.WEB_SEARCH_RESULT,
     "terminal.run": Origin.TOOL_OUTPUT,
     "git.diff": Origin.LOCAL_FILE,
     "claude.status": Origin.TOOL_OUTPUT,

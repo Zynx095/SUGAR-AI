@@ -14,6 +14,7 @@ can only act through permission-checked tools.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -202,6 +203,23 @@ _RULES: list[_Rule] = [
 
 _APP_RE = _r(r"(?:open|launch|start|run|fire up|bring up|load|pull up)(?: up)?(?: the| my)? "
              r"(?P<name>[\w .+\-']+?)(?: app| application| program)?")
+_NOT_APPS = {"downloads", "documents", "desktop", "pictures", "music", "videos", "folder", "file", "website", "site",
+             "page", "tab", "link", "url", "project", "repo", "document", "video", "song", "playlist", "door", "window",
+             "youtube", "google", "gmail", "github", "reddit", "netflix", "amazon", "wikipedia", "twitter", "instagram",
+             "facebook", "linkedin", "chatgpt", "stackoverflow", "whatsapp", "maps", "drive", "it", "this", "that",
+             "everything", "something", "camera", "dictation", "notes", "new", "browser"}
+
+
+def _looks_like_an_app(name: str, text: str) -> bool:
+    """"open xyz app" or a bare one-word name that isn't a site, folder or thing: worth "not installed"."""
+    words = name.strip().lower().split()
+    if not words or "." in name or any(w in _NOT_APPS for w in words):
+        return False
+    if re.search(r"\b(?:app|application|program)$", text):
+        return True
+    return len(words) == 1 and len(words[0]) >= 3
+
+
 _CLOSE_RE = _r(r"(?:close|quit|exit|kill|shut down|shut)(?: down)?(?: the| my)? "
                r"(?P<name>[\w .+\-']+?)(?: app| application| window| program)?")
 _PROJECT_RE = _r(r"(?:open|switch to|switch over to|use|load|go to|work on|start working on|jump to|"
@@ -258,6 +276,12 @@ class FastPath:
             if step is None or step.domain in ("control", "claude", "coding", "project", "memory"):
                 return None
             steps.extend(step.slots["steps"] if step.name == "sequence" else [step])
+            if step.name == "app.open":
+                # "open Paint and draw a cat", "open Notepad and write…": later clauses are about that app
+                opened = step.slots.get("app")
+                name = (getattr(opened, "name", None) or step.slots.get("name") or "").lower()
+                if name:
+                    view = dataclasses.replace(view, active_app=name.split()[0], active_is_browser=False)
         return Intent("sequence", {"steps": steps}, text)
 
     def _match_single(self, raw_text: str, text: str, view: DesktopView) -> Intent | None:
@@ -297,6 +321,9 @@ class FastPath:
             resolved = self.resolve_app(app.group("name"))
             if resolved is not None:
                 return Intent("app.open", {"app": resolved, "name": app.group("name")}, text)
+            if _looks_like_an_app(app.group("name"), text):
+                # Not installed (or not found): say so rather than letting a model improvise something else.
+                return Intent("app.missing", {"name": app.group("name")}, text)
 
         close = _CLOSE_RE.match(text)
         if close and self.resolve_app is not None:

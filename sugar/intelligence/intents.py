@@ -53,3 +53,8 @@ class DesktopView:
     has_search: bool = False  # a recent browser search exists ("open the first result")
     last_domain: str | None = None  # domain of Sugar's last action: typing, coding, browser…
     titles: tuple[str, ...] = ()  # lower-case titles of recent app windows
+    choosing: bool = False  # SID asked "which one?" after an ambiguous click
+    scrolling: bool = False  # continuous scrolling is running
+    camera_on: bool = False
+    dictating: bool = False
+    paint_open: bool = False  # Paint is open: "draw a circle" means Paint
