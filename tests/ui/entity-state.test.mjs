@@ -105,3 +105,34 @@ test("easeParams converges without allocating", () => {
   for (let i = 0; i < 300; i++) assert.equal(easeParams(current, target, 1 / 60), current);
   assert.ok(Math.abs(current.speed - target.speed) < 1e-3);
 });
+
+test("tool activities, dictation and the camera show as their own states", () => {
+  const t = new StateTracker();
+  t.applySnapshot({ state: "idle", sessions: [] });
+  t.apply({ type: "dictation.state", data: { active: true, mode: "dictation", app: "Notepad" } });
+  assert.equal(t.snapshot().state, "dictating");
+  assert.equal(t.snapshot().label, "Dictating into Notepad");
+  t.apply({ type: "state.changed", data: { state: "speaking" } });
+  assert.equal(t.snapshot().state, "speaking"); // speech still wins
+  t.apply({ type: "state.changed", data: { state: "tool_execution" } });
+  t.apply({ type: "activity", data: { kind: "drawing", active: true } });
+  assert.equal(t.snapshot().state, "drawing");
+  t.apply({ type: "activity", data: { kind: "camera_look", active: true } });
+  assert.equal(t.snapshot().state, "camera");
+  t.apply({ type: "activity", data: { kind: "camera_look", active: false } });
+  t.apply({ type: "activity", data: { kind: "drawing", active: false } });
+  t.apply({ type: "camera.state", data: { active: true, device: "Integrated Camera" } });
+  assert.equal(t.camera, "Integrated Camera");
+  t.apply({ type: "camera.state", data: { active: false } });
+  assert.equal(t.camera, null);
+  t.apply({ type: "dictation.state", data: { active: false } });
+  t.apply({ type: "state.changed", data: { state: "idle" } });
+  assert.equal(t.snapshot().state, "idle");
+});
+
+test("every state has a preset and a label", () => {
+  for (const s of STATES) {
+    assert.ok(PRESETS[s], `preset for ${s}`);
+    assert.ok(LABELS[s], `label for ${s}`);
+  }
+});

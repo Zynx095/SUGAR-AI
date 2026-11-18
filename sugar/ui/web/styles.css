@@ -379,3 +379,16 @@ details.output .said { padding: 4px 12px 10px; font-size: var(--t-xs); max-heigh
 .history-line { fill: none; stroke: var(--amber); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .history-dot { fill: var(--gold); }
 .history-note { color: var(--ash); margin: 8px 0 14px; }
+
+/* Visible state badges: the camera is never on without this showing; dictation shows where text is going. */
+.badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; min-height: 0; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  font-size: var(--t-xs); letter-spacing: 0.02em; border: 1px solid; }
+.badge[hidden] { display: none; }
+.badge-camera { color: #ff4d4d; border-color: rgba(255, 77, 77, 0.6); background: rgba(255, 40, 40, 0.12); }
+.badge-camera .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff3b3b;
+  box-shadow: 0 0 8px #ff3b3b; animation: badge-blink 1.4s ease-in-out infinite; }
+.badge-dictation { color: var(--gold); border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent); }
+@keyframes badge-blink { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .badge-camera .badge-dot { animation: none; } }

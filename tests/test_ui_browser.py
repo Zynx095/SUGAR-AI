@@ -232,6 +232,22 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
             results["error"] = await page.until("window.__sid.state().state === 'error' && window.__sid.status()")
             await page.until("window.__sid.state().state === 'idle'", 6)
 
+            # the camera badge is visible whenever the camera is on; dictation shows where text goes
+            bus.publish("camera.state", active=True, device="Integrated Camera")
+            results["camera_badge"] = await page.until(
+                "!document.getElementById('cameraBadge').hidden && document.getElementById('cameraText').textContent")
+            bus.publish("activity", kind="camera_look", active=True)
+            results["camera_state"] = await page.until("window.__sid.state().state === 'camera' && window.__sid.status()")
+            await page.screenshot("08-camera")
+            bus.publish("activity", kind="camera_look", active=False)
+            bus.publish("camera.state", active=False, device=None)
+            await page.until("document.getElementById('cameraBadge').hidden")
+            bus.publish("dictation.state", active=True, mode="dictation", app="Notepad", title="Untitled - Notepad")
+            results["dictation"] = await page.until(
+                "window.__sid.state().state === 'dictating' && document.getElementById('dictationText').textContent")
+            bus.publish("dictation.state", active=False, mode=None, app=None, title=None)
+            await page.until("document.getElementById('dictationBadge').hidden && window.__sid.state().state === 'idle'")
+
             # telemetry panel shows measured, not invented, values
             await page.eval("document.getElementById('devToggle').click()")
             await page.eval("document.querySelector('.tab[data-tab=engineering]').click()")
@@ -307,6 +323,9 @@ def test_ui_end_to_end_in_a_real_browser(tmp_path):
     assert results["entity"]["backend"] == "webgl" and results["entity"]["points"] > 15000
     assert results["project"] == "NO ACTIVE PROJECT"
     assert results["bench_idle"]["session"] is None and results["bench_idle"]["mode"] == "rail"
+    assert results["camera_badge"] == "Camera on · Integrated Camera"
+    assert results["camera_state"] == "Looking through the camera"
+    assert results["dictation"] == "Dictating into Notepad"
     assert results["states"]["listening"] == "Listening"
     assert results["states"]["transcribing"] == "Listening"
     assert results["states"]["tool_execution"] == "Executing task"

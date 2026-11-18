@@ -68,12 +68,29 @@ function alignEntity() {
   entity.setLayout({ x: Math.round(x), y: Math.round(y), zone: Math.round(zone) });
 }
 
+function renderBadges() {
+  const camera = $("cameraBadge");
+  if (camera) {
+    camera.hidden = !tracker.camera;
+    $("cameraText").textContent = tracker.camera ? `Camera on · ${tracker.camera}` : "Camera on";
+  }
+  const dictation = $("dictationBadge");
+  if (dictation) {
+    dictation.hidden = !tracker.dictation;
+    if (tracker.dictation) {
+      const verb = tracker.dictation.mode === "dictation" ? "Dictating into" : "Writing in";
+      $("dictationText").textContent = `${verb} ${tracker.dictation.app}`;
+    }
+  }
+}
+
 let holdTimer = 0;
 function renderEntityState() {
   const { state, label } = tracker.snapshot();
   app.dataset.entity = state;
   if (entity) entity.setState(state);
   $("status").textContent = label;
+  renderBadges();
   $("stopBtn").hidden = !["processing", "thinking", "executing", "speaking"].includes(state);
   // error and interruption are held briefly; re-evaluate when the hold lapses
   clearTimeout(holdTimer);

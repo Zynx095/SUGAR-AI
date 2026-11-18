@@ -8,6 +8,7 @@
 export const STATES = [
   "idle", "listening", "processing", "thinking", "coding", "executing",
   "speaking", "interrupted", "error", "offline", "muted", "creative", "research",
+  "dictating", "seeing", "camera", "drawing", "browsing", "writing",
 ];
 
 // Visual targets for the particle entity. The renderer eases toward them.
@@ -31,6 +32,12 @@ export const PRESETS = {
   offline:     { speed: 0.04, core: 0.28, turbulence: 0.08, inward: 0.0,  structure: 0.3,  rings: 0.18, field: 0.2,  streams: 0.0,  pulse: 0,   warn: 0, dim: 0.35, flicker: 0.0,  react: null },
   creative:    { speed: 0.5,  core: 1.0,  turbulence: 1.1,  inward: 0.0,  structure: 0.15, rings: 0.75, field: 0.95, streams: 0.7,  pulse: 3.0, warn: 0, dim: 1.0,  flicker: 0.25, react: null },
   research:    { speed: 0.8,  core: 0.95, turbulence: 0.2,  inward: 0.3,  structure: 0.9,  rings: 0.95, field: 0.6,  streams: 0.85, pulse: 2.0, warn: 0, dim: 1.0,  flicker: 0.05, react: null },
+  dictating:   { speed: 0.3,  core: 0.9,  turbulence: 0.15, inward: 0.05, structure: 0.8,  rings: 0.7,  field: 0.55, streams: 0.85, pulse: 0,   warn: 0,    dim: 1.0, flicker: 0.0,  react: "mic" },
+  writing:     { speed: 0.45, core: 0.95, turbulence: 0.2,  inward: 0.0,  structure: 0.85, rings: 0.8,  field: 0.6,  streams: 1.0,  pulse: 2.6, warn: 0,    dim: 1.0, flicker: 0.05, react: null },
+  seeing:      { speed: 0.55, core: 1.0,  turbulence: 0.2,  inward: 0.45, structure: 0.7,  rings: 0.9,  field: 0.8,  streams: 0.6,  pulse: 1.6, warn: 0,    dim: 1.0, flicker: 0.05, react: null },
+  camera:      { speed: 0.35, core: 1.1,  turbulence: 0.1,  inward: 0.7,  structure: 0.9,  rings: 0.85, field: 0.5,  streams: 0.3,  pulse: 2.2, warn: 0.35, dim: 1.0, flicker: 0.0,  react: null },
+  drawing:     { speed: 0.7,  core: 1.0,  turbulence: 0.6,  inward: 0.0,  structure: 0.4,  rings: 0.8,  field: 0.9,  streams: 0.9,  pulse: 2.5, warn: 0,    dim: 1.0, flicker: 0.2,  react: null },
+  browsing:    { speed: 0.8,  core: 0.95, turbulence: 0.2,  inward: 0.3,  structure: 0.9,  rings: 0.95, field: 0.6,  streams: 0.85, pulse: 2.0, warn: 0,    dim: 1.0, flicker: 0.05, react: null },
   muted:       { speed: 0.12, core: 0.55, turbulence: 0.15, inward: 0.0,  structure: 0.35, rings: 0.35, field: 0.35, streams: 0.15, pulse: 0,   warn: 0, dim: 0.6,  flicker: 0.0,  react: null },
 };
 
@@ -48,7 +55,18 @@ export const LABELS = {
   muted: "Microphone off",
   creative: "Composing",
   research: "Researching",
+  dictating: "Dictating",
+  writing: "Writing",
+  seeing: "Reading the screen",
+  camera: "Looking through the camera",
+  drawing: "Drawing",
+  browsing: "Searching the web",
 };
+
+// Foreground activities reported by tools ("activity" events), most specific first.
+const ACTIVITY_ORDER = ["camera_look", "drawing", "screen", "writing", "browsing"];
+const ACTIVITY_STATE = { camera_look: "camera", drawing: "drawing", screen: "seeing", writing: "writing",
+  browsing: "browsing" };
 
 const ERROR_HOLD_MS = 2600;
 const INTERRUPT_HOLD_MS = 650;
@@ -67,6 +85,9 @@ export class StateTracker {
     this.errorText = "";
     this.interruptedUntil = 0;
     this.mode = null; // creative | research — from the category of the current turn
+    this.activities = new Set(); // camera_look | drawing | screen | writing | browsing (from "activity" events)
+    this.dictation = null; // { app, mode } while dictation/writing mode is on
+    this.camera = null; // device name while the camera is on
   }
 
   setConnected(connected) {
@@ -80,6 +101,8 @@ export class StateTracker {
     if (data.state) this.backend = data.state;
     this.running.clear();
     for (const s of data.sessions || []) if (s.status === "running") this.running.set(s.project_path, s.project_name);
+    this.camera = data.camera || null;
+    this.dictation = data.dictation || null;
   }
 
   apply(event, now = Date.now()) {
@@ -109,6 +132,16 @@ export class StateTracker {
           this.mode = null;
         }
         break;
+      case "activity":
+        if (data.active) this.activities.add(data.kind);
+        else this.activities.delete(data.kind);
+        break;
+      case "dictation.state":
+        this.dictation = data.active ? { app: data.app || "the document", mode: data.mode } : null;
+        break;
+      case "camera.state":
+        this.camera = data.active ? data.device || "camera" : null;
+        break;
       case "coding.session":
         if (data.status === "running") this.running.set(data.project_path, data.project_name);
         else this.running.delete(data.project_path);
@@ -133,6 +166,7 @@ export class StateTracker {
 
   /** The entity state and its status line at time ``now``. */
   snapshot(now = Date.now()) {
+    const activity = ACTIVITY_ORDER.find((kind) => this.activities.has(kind)) || null;
     const s = deriveState({
       connected: this.connected,
       backend: this.backend,
@@ -141,21 +175,29 @@ export class StateTracker {
       mode: this.mode,
       errorActive: now < this.errorUntil,
       interruptedActive: now < this.interruptedUntil,
+      activity: activity ? ACTIVITY_STATE[activity] : null,
+      dictating: !!(this.dictation && this.dictation.mode === "dictation"),
     });
     let label = LABELS[s];
     if (s === "coding") label = `Engineering in ${this.codingProject}`;
+    if (s === "dictating" && this.dictation) label = `Dictating into ${this.dictation.app}`;
+    if (s === "writing" && this.dictation) label = `Writing in ${this.dictation.app}`;
     if (s === "error") label = this.errorText || LABELS.error;
     return { state: s, label };
   }
 }
 
-/** Precedence: connection → fault → interruption → foreground activity → background Claude Code → idle. */
-export function deriveState({ connected, backend, phase, codingProject, errorActive, interruptedActive, mode = null }) {
+/** Precedence: connection → fault → interruption → speaking → a tool's visible activity (camera, drawing, reading
+ * the screen, writing, browsing) → dictation → hearing → thinking → background Claude Code → idle. */
+export function deriveState({ connected, backend, phase, codingProject, errorActive, interruptedActive, mode = null,
+  activity = null, dictating = false }) {
   if (!connected) return "offline";
   if (backend === "error" || errorActive) return "error";
   if (backend === "interrupted" || interruptedActive) return "interrupted";
   if (backend === "paused") return "muted";
   if (backend === "speaking") return "speaking";
+  if (activity) return activity;
+  if (dictating && ["listening", "transcribing", "idle"].includes(backend)) return "dictating";
   if (backend === "listening") return "listening";
   // Transcribing is still part of hearing: most speech near the mic is not addressed to SID. "Analysing
   // request" appears only once a turn has actually started.

@@ -396,6 +396,10 @@ class SIDApp:
             "personality": self.personality.describe(canonical(self.settings.tts.voice_profile)),
             "connectivity": self.pool.connectivity(),
             "roleplay": bool(self.working.roleplay),
+            "camera": self.computer.camera.device.name if self.computer.camera.active and self.computer.camera.device
+            else None,
+            "dictation": ({"app": self.dictation.target.window.app, "mode": self.dictation.mode}
+                          if self.dictation.active and self.dictation.target else None),
         }
 
     # ------------------------------------------------------------------ personality
